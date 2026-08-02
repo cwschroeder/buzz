@@ -102,25 +102,127 @@ fn managed_node_failed_step(stderr: String) -> InstallStepResult {
     }
 }
 
-fn managed_node_runtime_ready() -> bool {
+pub(super) fn managed_node_runtime_ready() -> bool {
     let Some(node) = crate::managed_agents::buzz_managed_node_bin_path() else {
         return false;
     };
     if !node.is_file() {
         return false;
     }
+
+    // Version probe with a 3-second deadline so a hung or corrupted binary
+    // cannot stall the install path for every agent on the machine.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
     let mut cmd = std::process::Command::new(&node);
     cmd.arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     crate::util::configure_no_window(&mut cmd);
-    let output = cmd.output();
-    output
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == MANAGED_NODE_VERSION)
-        .unwrap_or(false)
+    let Ok(mut child) = cmd.spawn() else {
+        return false;
+    };
+
+    // Drain stdout on a background thread so the read cannot block after the
+    // child exits but while a descendant still holds the pipe open.  The thread
+    // terminates as soon as the pipe closes — which happens at the latest when
+    // we kill the child and reap it — so the join is bounded by the same
+    // deadline that bounds the child itself.
+    let Some(mut stdout_pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+    let drain_handle = std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = std::io::Read::read_to_string(&mut stdout_pipe, &mut buf);
+        buf
+    });
+
+    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
+    let exit_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    // Drain thread will see EOF now; join it to avoid a leak.
+                    let _ = drain_handle.join();
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = drain_handle.join();
+                return false;
+            }
+        }
+    };
+
+    if !exit_status.success() {
+        // Child exited unsuccessfully; drain thread will see EOF and finish.
+        let _ = drain_handle.join();
+        return false;
+    }
+    let Ok(output) = drain_handle.join() else {
+        return false;
+    };
+    output.trim() == MANAGED_NODE_VERSION
+}
+
+/// Returns `true` when the managed Node runtime is absent or no longer executes —
+/// meaning any existing npm adapter shims are broken and must be reinstalled.
+///
+/// This fires when the pinned Node version changes (e.g. v24.11.0 → v24.18.0):
+/// the old dir stays on disk, shims appear installed, but they fail at run time
+/// because the Node binary they reference is gone.  Treating the adapter as
+/// missing forces `ensure_managed_node_runtime_blocking` to re-download Node and
+/// npm to reinstall the shims.
+pub(super) fn managed_node_orphaned() -> bool {
+    managed_node_runtime_supported() && !managed_node_runtime_ready()
+}
+
+/// Resolve the adapter binary path for install-path decisions, accounting for
+/// the Node-orphan case.
+///
+/// This resolves the candidate first.  If the resolved path lives under
+/// `buzz_managed_npm_bin_dir()` AND the managed Node runtime is absent or stale
+/// (e.g. after a version bump leaving the old dir on disk), it returns `None` to
+/// force `plan_adapter_install` to schedule a reinstall.  That reinstall in turn
+/// triggers `ensure_managed_node_runtime_blocking` to re-download the correct
+/// Node version before npm reinstalls the adapter shims.
+///
+/// Healthy external adapters (those that resolve outside the managed npm prefix)
+/// are never overridden, even when managed Node is absent.  Only Buzz-managed
+/// shims — which are tied to the managed Node binary — need to be invalidated.
+pub(super) fn resolve_adapter_path(
+    commands: &[&str],
+    adapter_install_commands: &[&str],
+) -> Option<std::path::PathBuf> {
+    let resolved = commands
+        .iter()
+        .find_map(|cmd| crate::managed_agents::resolve_command(cmd));
+
+    // Only apply the orphan override when the resolved binary actually lives
+    // inside the Buzz-managed npm prefix.  An external adapter on PATH that
+    // happens to share a name must not be silently discarded.
+    let needs_managed_npm = adapter_install_commands
+        .iter()
+        .any(|cmd| is_npm_global_install(cmd));
+    if needs_managed_npm && managed_node_orphaned() {
+        if let (Some(ref path), Some(ref managed_bin)) =
+            (&resolved, crate::managed_agents::buzz_managed_npm_bin_dir())
+        {
+            if path.starts_with(managed_bin) {
+                return None;
+            }
+        }
+    }
+
+    resolved
 }
 
 fn managed_node_install_lock() -> &'static Mutex<()> {
@@ -744,5 +846,148 @@ mod tests {
             let err = verify_node_tree(tmp.path()).unwrap_err();
             assert!(err.contains("npm"), "err: {err}");
         }
+    }
+
+    // ── resolve_adapter_path / orphan guard tests ─────────────────────────────
+
+    /// When no commands resolve to a real binary, resolve_adapter_path returns None.
+    /// This verifies the fallback path — the orphan guard is inactive when
+    /// the adapter install commands do not use managed npm.
+    #[test]
+    fn test_resolve_adapter_path_returns_none_when_binary_absent() {
+        let commands: &[&str] = &["nonexistent-buzz-test-binary-xyz"];
+        let adapter_install_commands: &[&str] = &["curl -fsSL https://example.com | bash"];
+        // Non-npm adapter_install_commands: orphan guard is bypassed.
+        // No binary on PATH, so resolve_command returns None.
+        assert!(
+            resolve_adapter_path(commands, adapter_install_commands).is_none(),
+            "must return None when the command is not on PATH"
+        );
+    }
+
+    /// A resolved binary that lives OUTSIDE the managed npm prefix is never
+    /// discarded by the orphan guard, even when managed Node is absent or stale.
+    /// This is the external-healthy-adapter case Thufir identified.
+    #[test]
+    fn test_resolve_adapter_path_keeps_external_adapter_when_node_orphaned() {
+        // Use a system binary guaranteed to be outside the managed npm prefix.
+        #[cfg(unix)]
+        let adapter_binary = "/bin/sh";
+        #[cfg(windows)]
+        let adapter_binary = "cmd";
+
+        let commands: &[&str] = &[adapter_binary];
+        let adapter_install_commands: &[&str] = &["npm install -g @example/some-acp"];
+
+        let result = resolve_adapter_path(commands, adapter_install_commands);
+        // Verify the chosen binary is outside the managed prefix (test invariant).
+        if let Some(ref managed_bin) = crate::managed_agents::buzz_managed_npm_bin_dir() {
+            if let Some(ref resolved) = result {
+                assert!(
+                    !resolved.starts_with(managed_bin),
+                    "test invariant broken: chosen binary is inside the managed npm prefix"
+                );
+            }
+        }
+        // External adapter must survive the orphan guard regardless of Node state.
+        assert!(
+            result.is_some(),
+            "external adapter must not be discarded by the orphan guard: {adapter_binary}"
+        );
+    }
+
+    /// resolve_adapter_path returns None for npm-backed adapters when the resolved
+    /// binary lives under buzz_managed_npm_bin_dir() AND managed Node is orphaned.
+    ///
+    /// This test is platform-gated to supported targets because
+    /// managed_node_runtime_supported() is false on unsupported platforms and the
+    /// guard is a no-op there.
+    #[test]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "aarch64"),
+    ))]
+    fn test_resolve_adapter_path_invalidates_managed_shim_when_node_orphaned() {
+        if !managed_node_orphaned() {
+            // Node is actually installed and healthy — the guard is correctly
+            // inactive.  Skip rather than asserting the wrong direction.
+            return;
+        }
+
+        // To trigger the guard, we need the resolved path to appear inside the
+        // managed npm bin dir.  We write a sentinel binary there, resolve it,
+        // then confirm the guard fires and returns None.
+        let Some(managed_bin) = crate::managed_agents::buzz_managed_npm_bin_dir() else {
+            return; // Path not resolvable on this machine — skip.
+        };
+        let _ = std::fs::create_dir_all(&managed_bin);
+        let sentinel_name = "buzz-test-orphan-sentinel";
+        #[cfg(unix)]
+        let sentinel = managed_bin.join(sentinel_name);
+        #[cfg(windows)]
+        let sentinel = managed_bin.join(format!("{sentinel_name}.cmd"));
+        let _ = std::fs::write(&sentinel, b"");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o755));
+        }
+
+        // Temporarily prepend managed_bin to PATH so resolve_command finds it.
+        let original_path = std::env::var_os("PATH").unwrap_or_default();
+        let new_path = std::env::join_paths(
+            std::iter::once(managed_bin.clone()).chain(std::env::split_paths(&original_path)),
+        )
+        .unwrap();
+        // SAFETY: single-threaded test context; no other thread reads PATH here.
+        // This is a test-only mutation isolated to this function.
+        unsafe { std::env::set_var("PATH", &new_path) };
+
+        let commands: &[&str] = &[sentinel_name];
+        let adapter_install_commands: &[&str] = &["npm install -g @example/some-acp"];
+        let result = resolve_adapter_path(commands, adapter_install_commands);
+
+        // Restore PATH and remove the sentinel.
+        unsafe { std::env::set_var("PATH", &original_path) };
+        let _ = std::fs::remove_file(&sentinel);
+
+        assert!(
+            result.is_none(),
+            "managed shim must be invalidated when Node is orphaned"
+        );
+    }
+
+    /// managed_node_runtime_ready returns false when the node binary path does not
+    /// exist (which is always the case in CI and fresh installs with no managed
+    /// Node runtime).  This covers the fast-path (file-existence check) without
+    /// spawning a process.
+    #[test]
+    fn test_managed_node_runtime_ready_returns_false_when_binary_absent() {
+        // In CI the managed node dir is not provisioned, so the binary does not
+        // exist and managed_node_runtime_ready must return false immediately.
+        // If the binary DOES exist (developer machine with the runtime installed),
+        // the test skips rather than asserting a value that depends on the
+        // installed version — version match is already covered by the runtime
+        // itself, and process-level behaviour is tested by the node tree tests.
+        let Some(node) = crate::managed_agents::buzz_managed_node_bin_path() else {
+            // No path resolvable — ready must be false.
+            assert!(
+                !managed_node_runtime_ready(),
+                "managed_node_runtime_ready must return false when no path resolves"
+            );
+            return;
+        };
+        if node.is_file() {
+            // Binary present; result depends on the installed version. Skip.
+            return;
+        }
+        assert!(
+            !managed_node_runtime_ready(),
+            "managed_node_runtime_ready must return false when the binary file does not exist"
+        );
     }
 }
