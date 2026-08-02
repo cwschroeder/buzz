@@ -41,8 +41,6 @@ use buzz_core::TenantContext;
 
 /// Timeout for `info/refs` — ref advertisement is fast (essentially `git show-ref`).
 const INFO_REFS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-/// Timeout for pack operations (upload-pack, receive-pack) — large repos need time.
-const PACK_OPS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// Maximum buffered response bytes for receive-pack status output.
 ///
 /// A receive-pack response is protocol status, not repository contents. One
@@ -970,11 +968,11 @@ pub async fn upload_pack(
     stream_git_read(
         repo,
         permit,
-        "upload-pack",
         &[],
         body,
         Vec::new(),
         "application/x-git-upload-pack-result".to_string(),
+        state.config.git_pack_ops_timeout,
     )
 }
 
@@ -1095,6 +1093,7 @@ pub async fn receive_pack(
         &hook_env,
         &state.config.git_repo_path,
         RECEIVE_PACK_MAX_OUTPUT_BYTES,
+        state.config.git_pack_ops_timeout,
     )
     .await?;
 
@@ -1148,6 +1147,7 @@ async fn run_git_at(
     extra_env: &[(&str, String)],
     scratch_dir: &Path,
     max_output_bytes: u64,
+    pack_ops_timeout: Duration,
 ) -> Result<PackOutput, Response> {
     let stdout_tmp = tempfile::NamedTempFile::new_in(scratch_dir).map_err(|e| {
         error!(error = %e, service = %service, "git stdout tempfile failed");
@@ -1213,7 +1213,7 @@ async fn run_git_at(
     });
     let body_abort = body_task.abort_handle();
 
-    let timeout_result = tokio::time::timeout(PACK_OPS_TIMEOUT, async {
+    let timeout_result = tokio::time::timeout(pack_ops_timeout, async {
         let _ = body_task.await;
         child.wait().await
     })
@@ -1222,7 +1222,7 @@ async fn run_git_at(
     let status = match timeout_result {
         Err(_elapsed) => {
             body_abort.abort();
-            warn!(service = %service, timeout_secs = PACK_OPS_TIMEOUT.as_secs(), "git subprocess timed out");
+            warn!(service = %service, timeout_secs = pack_ops_timeout.as_secs(), "git subprocess timed out");
             return Err((StatusCode::GATEWAY_TIMEOUT, "git operation timed out").into_response());
         }
         Ok(Err(e)) => {
@@ -1564,12 +1564,13 @@ impl Drop for StreamingGit {
 fn stream_git_read(
     repo: HydratedRepo,
     permit: tokio::sync::OwnedSemaphorePermit,
-    service: &'static str,
     extra_args: &[&str],
     body: Body,
     prefix: Vec<u8>,
     content_type: String,
+    pack_ops_timeout: Duration,
 ) -> Result<Response, Response> {
+    let service = "upload-pack";
     let mut cmd = Command::new("git");
     cmd.arg(service).arg("--stateless-rpc");
     for a in extra_args {
@@ -1618,7 +1619,7 @@ fn stream_git_read(
 
     let stdout = child.stdout.take().expect("stdout piped");
     let git_stream = StreamingGit {
-        inner: TimedByteStream::new(tokio_util::io::ReaderStream::new(stdout), PACK_OPS_TIMEOUT),
+        inner: TimedByteStream::new(tokio_util::io::ReaderStream::new(stdout), pack_ops_timeout),
         child,
         _repo: repo,
         stdin_task,

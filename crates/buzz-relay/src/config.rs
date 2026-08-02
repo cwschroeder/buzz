@@ -251,6 +251,9 @@ pub struct Config {
     pub git_max_repos_per_pubkey: u32,
     /// Maximum concurrent git subprocess operations. Default: 20.
     pub git_max_concurrent_ops: usize,
+    /// Maximum wall-clock time for a git pack operation, including request
+    /// body upload. Default: 300 seconds.
+    pub git_pack_ops_timeout: Duration,
     /// HMAC secret for git pre-receive hook callbacks.
     /// Used to authenticate internal policy endpoint requests.
     pub git_hook_hmac_secret: String,
@@ -796,6 +799,10 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
+        let git_pack_ops_timeout = Duration::from_secs(positive_u64_from_env(
+            "BUZZ_GIT_PACK_OPS_TIMEOUT_SECS",
+            300,
+        )?);
         let git_hook_hmac_secret: String = std::env::var("BUZZ_GIT_HOOK_HMAC_SECRET")
             .unwrap_or_else(|_| {
                 // Generate a random secret if not configured (dev mode).
@@ -976,6 +983,7 @@ impl Config {
             git_pack_cache_max_concurrent_populations,
             git_max_repos_per_pubkey,
             git_max_concurrent_ops,
+            git_pack_ops_timeout,
             git_hook_hmac_secret,
             push_executor_key_id,
             push_gateway_delivery_url,
@@ -1051,6 +1059,46 @@ mod tests {
             config.huddle_audio_available,
             "huddle_audio_available should default to true so single-pod (N=1) keeps today's huddle behavior"
         );
+    }
+
+    #[test]
+    fn git_pack_ops_timeout_env_override_and_invalid_values() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous = std::env::var_os("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS");
+
+        std::env::remove_var("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS");
+        let default = Config::from_env()
+            .expect("default config")
+            .git_pack_ops_timeout;
+
+        std::env::set_var("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS", "3600");
+        let overridden = Config::from_env()
+            .expect("overridden config")
+            .git_pack_ops_timeout;
+
+        std::env::set_var("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS", "0");
+        let zero = Config::from_env();
+        std::env::set_var("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS", "invalid");
+        let invalid = Config::from_env();
+
+        if let Some(value) = previous {
+            std::env::set_var("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS", value);
+        } else {
+            std::env::remove_var("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS");
+        }
+
+        assert_eq!(default, Duration::from_secs(300));
+        assert_eq!(overridden, Duration::from_secs(3600));
+        assert!(matches!(
+            zero,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS must be a positive integer")
+        ));
+        assert!(matches!(
+            invalid,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("BUZZ_GIT_PACK_OPS_TIMEOUT_SECS must be a positive integer")
+        ));
     }
 
     #[test]
