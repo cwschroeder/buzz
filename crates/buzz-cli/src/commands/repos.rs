@@ -142,12 +142,18 @@ fn build_updated_repo_announcement(
         ))
     })?;
 
-    // Advance only the observed head. Using wall-clock time here would let a
-    // delayed writer leapfrog an intervening update and silently erase metadata.
+    // Advance at least to the observed head (conflict detection for rapid successive
+    // updates), but never below wall-clock: the relay rejects events outside its
+    // ±15-minute freshness window, so a pure head+1 timestamp made every update on a
+    // repo older than 15 minutes unusable. Tradeoff: two writers reading the same
+    // stale head in overlapping wall-clock windows race last-writer-wins instead of
+    // producing a duplicate conflict.
+    let now = Timestamp::now().as_secs();
     let next_created_at = existing
         .created_at
         .as_secs()
         .checked_add(1)
+        .map(|head_plus_one| head_plus_one.max(now))
         .ok_or_else(|| CliError::Other("repository timestamp cannot be advanced".into()))?;
     buzz_sdk::build_repo_announcement_with_tags(repo_id, &existing.content, tags)
         .map_err(|error| CliError::Other(format!("failed to build repository update: {error}")))
@@ -510,7 +516,13 @@ mod tests {
         .expect("sign update");
 
         assert_eq!(updated.content, "repository content");
-        assert_eq!(updated.created_at.as_secs(), 101);
+        // Stale head (100): wall-clock gewinnt über head+1 (Freshness-Fenster des Relays).
+        let now = Timestamp::now().as_secs();
+        assert!(
+            updated.created_at.as_secs() >= now - 2,
+            "created_at {} should be wall-clock now (~{now})",
+            updated.created_at.as_secs()
+        );
         assert!(!updated
             .tags
             .iter()
@@ -548,6 +560,29 @@ mod tests {
                 })
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn protection_update_advances_head_for_fresh_repo() {
+        // Frischer Head (jetzt): head+1 bleibt führend (Conflict-Erkennung bei
+        // aufeinanderfolgenden Updates), nicht die Wall-Clock.
+        let head = Timestamp::now().as_secs();
+        let existing = signed_repo(vec![tag(&["d", "demo"])], "", head);
+
+        let updated = build_updated_repo_announcement(
+            &existing,
+            ProtectionChange::Remove("refs/heads/main".into()),
+        )
+        .expect("build update")
+        .sign_with_keys(&Keys::generate())
+        .expect("sign update");
+
+        assert!(
+            updated.created_at.as_secs() >= head + 1
+                && updated.created_at.as_secs() <= head + 2,
+            "created_at {} should advance the fresh head ({head})",
+            updated.created_at.as_secs()
         );
     }
 
