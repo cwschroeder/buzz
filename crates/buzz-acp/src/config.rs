@@ -288,6 +288,16 @@ pub struct CliArgs {
     )]
     pub system_prompt_file: Option<PathBuf>,
 
+    /// If an owner-authored turn ends with assistant text but no threaded agent
+    /// message, publish that text as a reply. Disabled by default; never applies
+    /// to agent-authored turns.
+    #[arg(
+        long,
+        env = "BUZZ_ACP_AUTO_PUBLISH_RESPONSE_FALLBACK",
+        default_value_t = false
+    )]
+    pub auto_publish_response_fallback: bool,
+
     /// Number of parallel agent subprocesses.
     #[arg(long, env = "BUZZ_ACP_AGENTS", default_value_t = 1,
           value_parser = clap::value_parser!(u32).range(1..=32))]
@@ -505,6 +515,9 @@ pub struct Config {
     pub turn_liveness_secs: u64,
     pub heartbeat_prompt: Option<String>,
     pub system_prompt: Option<String>,
+    /// Owner-only safety net for agents that return useful text without
+    /// executing the required Buzz publish tool.
+    pub auto_publish_response_fallback: bool,
     /// Team-owned instructions layered separately from the agent system prompt.
     pub team_instructions: Option<String>,
     pub initial_message: Option<String>,
@@ -1066,6 +1079,7 @@ impl Config {
             turn_liveness_secs,
             heartbeat_prompt,
             system_prompt,
+            auto_publish_response_fallback: args.auto_publish_response_fallback,
             team_instructions: args
                 .team_instructions
                 .as_deref()
@@ -1123,7 +1137,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} auto_publish_response_fallback={} model={} permission_mode={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1142,6 +1156,7 @@ impl Config {
             self.presence_enabled,
             self.typing_enabled,
             self.memory_enabled,
+            self.auto_publish_response_fallback,
             self.model.as_deref().unwrap_or("(agent default)"),
             self.permission_mode,
             respond_to_detail,
@@ -1444,6 +1459,7 @@ mod tests {
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
             system_prompt: None,
+            auto_publish_response_fallback: false,
             team_instructions: None,
             initial_message: None,
             subscribe_mode: mode,

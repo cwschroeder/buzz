@@ -512,6 +512,9 @@ pub struct PromptContext {
     /// Sanitized title for each new ACP session, sent as `_meta.sessionTitle`
     /// on `session/new`. Never part of the prompt.
     pub session_title: Option<String>,
+    /// Owner-only safety net that publishes streamed assistant text when the
+    /// agent failed to execute a Buzz publish tool.
+    pub auto_publish_response_fallback: bool,
     pub team_instructions: Option<String>,
     pub heartbeat_prompt: Option<String>,
     /// Base prompt content, or `None` if `--no-base-prompt` was passed.
@@ -2080,9 +2083,17 @@ pub async fn run_prompt_task(
         }
     };
 
+    let fallback_text = agent.acp.take_turn_agent_message();
+
     match prompt_result {
         Ok(stop_reason) => {
             log_stop_reason(&source, &stop_reason);
+
+            if ctx.auto_publish_response_fallback {
+                if let Some(batch) = batch.as_ref() {
+                    publish_owner_response_fallback(&ctx, batch, &fallback_text).await;
+                }
+            }
 
             let should_rotate = matches!(
                 stop_reason,
@@ -3752,6 +3763,182 @@ async fn publish_agent_turn_metric(
     }
 }
 
+/// Publish streamed assistant text only when an owner-authored turn has no
+/// agent reply yet.
+///
+/// This is intentionally a fallback rather than the primary publishing path:
+/// agents should still use the Buzz tools so explicit protocol markers and
+/// exactly-once wrappers remain authoritative. Agent-authored turns are
+/// excluded to prevent an automatic agent-to-agent ping-pong loop.
+fn blocks_owner_response_fallback(trigger_content: &str) -> bool {
+    trigger_content.contains("[PILOT-REQUIRE-DELEGATION:")
+}
+
+fn attach_owner_response_auth_tag(
+    builder: nostr::EventBuilder,
+    auth_tag_json: Option<&str>,
+) -> Result<nostr::EventBuilder, buzz_sdk::SdkError> {
+    let Some(auth_tag_json) = auth_tag_json else {
+        return Ok(builder);
+    };
+    let auth_tag = buzz_sdk::nip_oa::parse_auth_tag(auth_tag_json)?;
+    Ok(builder.tags([auth_tag]))
+}
+
+async fn publish_owner_response_fallback(ctx: &PromptContext, batch: &FlushBatch, content: &str) {
+    use buzz_sdk::ThreadRef;
+    use nostr::{Alphabet, SingleLetterTag};
+
+    let content = content.trim();
+    if content.is_empty() {
+        return;
+    }
+    let Some(trigger) = batch.events.last().map(|entry| &entry.event) else {
+        return;
+    };
+    let Some(owner) = ctx.agent_owner_pubkey.as_ref() else {
+        return;
+    };
+    if &trigger.pubkey != owner {
+        return;
+    }
+    if blocks_owner_response_fallback(&trigger.content) {
+        tracing::warn!(
+            target: "pool::response_fallback",
+            channel = %batch.channel_id,
+            "explicit pilot protocol command ended without a wrapper publish; failing closed"
+        );
+        return;
+    }
+
+    let thread_tags = crate::queue::parse_thread_tags(trigger);
+    let root_id = match thread_tags.root_event_id.as_deref() {
+        Some(root) => match nostr::EventId::from_hex(root) {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::warn!(
+                    target: "pool::response_fallback",
+                    "invalid root event id: {error}"
+                );
+                return;
+            }
+        },
+        None => trigger.id,
+    };
+    let root_hex = root_id.to_hex();
+    let channel_text = batch.channel_id.to_string();
+    let reply_filter = nostr::Filter::new()
+        .kinds([
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16),
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
+        ])
+        .author(ctx.agent_keys.public_key())
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::E), [root_hex.as_str()])
+        .custom_tags(
+            SingleLetterTag::lowercase(Alphabet::H),
+            [channel_text.as_str()],
+        )
+        .limit(1);
+
+    let existing = match tokio::time::timeout(
+        Duration::from_secs(3),
+        ctx.rest_client.query(&[reply_filter]),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value.as_array().is_some_and(|events| !events.is_empty()),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                channel = %batch.channel_id,
+                "reply check failed closed: {error}"
+            );
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                channel = %batch.channel_id,
+                "reply check timed out; failing closed"
+            );
+            return;
+        }
+    };
+    if existing {
+        tracing::debug!(
+            target: "pool::response_fallback",
+            channel = %batch.channel_id,
+            "agent already published a threaded reply"
+        );
+        return;
+    }
+
+    let thread_ref = ThreadRef {
+        root_event_id: root_id,
+        parent_event_id: root_id,
+    };
+    let author_hex = trigger.pubkey.to_hex();
+    let builder = match buzz_sdk::build_message(
+        batch.channel_id,
+        content,
+        Some(&thread_ref),
+        &[&author_hex],
+        false,
+        &[],
+    ) {
+        Ok(builder) => builder,
+        Err(error) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                channel = %batch.channel_id,
+                "failed to build fallback reply: {error}"
+            );
+            return;
+        }
+    };
+    let builder =
+        match attach_owner_response_auth_tag(builder, ctx.rest_client.auth_tag_json.as_deref()) {
+            Ok(builder) => builder,
+            Err(error) => {
+                tracing::warn!(
+                    target: "pool::response_fallback",
+                    channel = %batch.channel_id,
+                    "invalid owner auth tag for fallback reply; failing closed: {error}"
+                );
+                return;
+            }
+        };
+    let event = match builder.sign_with_keys(&ctx.agent_keys) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                channel = %batch.channel_id,
+                "failed to sign fallback reply: {error}"
+            );
+            return;
+        }
+    };
+    match tokio::time::timeout(Duration::from_secs(5), ctx.rest_client.submit_event(&event)).await {
+        Ok(Ok(_)) => tracing::info!(
+            target: "pool::response_fallback",
+            channel = %batch.channel_id,
+            event_id = %event.id,
+            "published owner-only response fallback"
+        ),
+        Ok(Err(error)) => tracing::warn!(
+            target: "pool::response_fallback",
+            channel = %batch.channel_id,
+            "fallback publish failed: {error}"
+        ),
+        Err(_) => tracing::warn!(
+            target: "pool::response_fallback",
+            channel = %batch.channel_id,
+            "fallback publish timed out"
+        ),
+    }
+}
+
 const REACTION_SEEN: &str = "👀";
 const REACTION_WORKING: &str = "💬";
 
@@ -3994,6 +4181,51 @@ mod tests {
         // message is left untouched even when a base_prompt is present.
         let composed = prepend_base_for_legacy(2, Some("you are a helpful agent"), "hello channel");
         assert_eq!(composed, "hello channel");
+    }
+
+    #[test]
+    fn owner_response_fallback_fails_closed_for_required_delegation() {
+        assert!(blocks_owner_response_fallback(
+            "@Repo-Agent [PILOT-REQUIRE-DELEGATION:buzz:check-1] delegate once"
+        ));
+        assert!(!blocks_owner_response_fallback(
+            "@Repo-Agent answer directly without delegation"
+        ));
+    }
+
+    #[test]
+    fn owner_response_fallback_attaches_configured_owner_auth_tag() {
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let auth_tag_json =
+            buzz_sdk::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
+                .expect("valid owner auth tag");
+        let builder = buzz_sdk::build_message(Uuid::new_v4(), "fallback", None, &[], false, &[])
+            .expect("valid message");
+
+        let event = attach_owner_response_auth_tag(builder, Some(&auth_tag_json))
+            .expect("valid auth tag")
+            .sign_with_keys(&agent_keys)
+            .expect("event signing");
+
+        let auth_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("auth"))
+            .collect();
+        assert_eq!(auth_tags.len(), 1);
+        assert_eq!(
+            auth_tags[0].as_slice().get(1),
+            Some(&owner_keys.public_key().to_hex())
+        );
+    }
+
+    #[test]
+    fn owner_response_fallback_rejects_malformed_owner_auth_tag() {
+        let builder = buzz_sdk::build_message(Uuid::new_v4(), "fallback", None, &[], false, &[])
+            .expect("valid message");
+
+        assert!(attach_owner_response_auth_tag(builder, Some("not-json")).is_err());
     }
 
     #[test]
@@ -6386,6 +6618,7 @@ mod tests {
             dedup_mode: DedupMode::Drop,
             system_prompt: None,
             session_title: None,
+            auto_publish_response_fallback: false,
             team_instructions: None,
             heartbeat_prompt: None,
             base_prompt: None,

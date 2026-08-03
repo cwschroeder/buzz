@@ -162,6 +162,12 @@ pub struct AcpClient {
     /// Used by [`cancel_with_cleanup`] to drain the correct response.
     /// Set in [`session_prompt_with_idle_timeout`]; consumed in [`cancel_with_cleanup`].
     last_prompt_id: Option<u64>,
+    /// Plain assistant text streamed during the current prompt turn.
+    ///
+    /// The default Buzz contract still requires agents to publish through a
+    /// tool. The pool may consume this buffer only when the explicitly enabled
+    /// owner-only response fallback is active.
+    turn_agent_message: String,
     /// Hard deadline for the current turn, set by `session_prompt_with_idle_timeout`.
     /// Inherited by `cancel_with_cleanup` so the drain loop shares the same budget
     /// rather than starting a fresh timer (prevents double-jeopardy).
@@ -542,6 +548,7 @@ impl AcpClient {
             pending_permission_id: None,
             permission_responded: false,
             last_prompt_id: None,
+            turn_agent_message: String::new(),
             current_hard_deadline: None,
             observer: None,
             observer_agent_index: None,
@@ -751,6 +758,7 @@ impl AcpClient {
         idle_timeout: std::time::Duration,
         max_duration: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
+        self.turn_agent_message.clear();
         let params = build_prompt_params(session_id, prompt_blocks);
         let hard_deadline = tokio::time::Instant::now() + max_duration;
         self.current_hard_deadline = Some(hard_deadline);
@@ -862,6 +870,11 @@ impl AcpClient {
     /// publish a kind 44200 NIP-AM event.
     pub fn take_turn_usage(&mut self) -> Option<TurnUsage> {
         self.goose_usage.take()
+    }
+
+    /// Consume assistant text streamed during the most recent prompt turn.
+    pub fn take_turn_agent_message(&mut self) -> String {
+        std::mem::take(&mut self.turn_agent_message)
     }
 
     /// Install a per-turn steer request channel for goose-native
@@ -1714,6 +1727,7 @@ impl AcpClient {
         match update_type {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
+                    self.turn_agent_message.push_str(text);
                     tracing::info!(target: "acp::stream", "{text}");
                 }
                 false

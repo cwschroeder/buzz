@@ -1534,6 +1534,7 @@ async fn tokio_main() -> Result<()> {
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
         session_title: config.session_title.clone(),
+        auto_publish_response_fallback: config.auto_publish_response_fallback,
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
             None
@@ -4228,6 +4229,19 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     });
                 }
             }
+            // Pilot repo agents load a fail-closed descriptor before starting
+            // the harness. Preserve only its non-secret identity and workspace
+            // fields across the buzz-agent MCP environment boundary.
+            for name in ["PILOT_REPO_ID", "PILOT_REPO_WORKSPACE"] {
+                if let Ok(value) = std::env::var(name) {
+                    if !value.is_empty() {
+                        env.push(EnvVar {
+                            name: name.into(),
+                            value,
+                        });
+                    }
+                }
+            }
             env
         },
     }]
@@ -5007,6 +5021,7 @@ mod build_mcp_servers_tests {
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
             system_prompt: None,
+            auto_publish_response_fallback: false,
             team_instructions: None,
             initial_message: None,
             subscribe_mode: config::SubscribeMode::All,
@@ -5072,6 +5087,23 @@ mod build_mcp_servers_tests {
             "BUZZ_AUTH_TAG should be forwarded when set"
         );
         assert_eq!(auth_tag_env.unwrap().value, "test-attestation-tag");
+    }
+
+    #[test]
+    fn session_new_mcp_server_forwards_pilot_repo_descriptor() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PILOT_REPO_ID", "ivu-smp");
+        std::env::set_var("PILOT_REPO_WORKSPACE", "/tmp/ivu-smp");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("PILOT_REPO_ID");
+        std::env::remove_var("PILOT_REPO_WORKSPACE");
+
+        let server = &servers[0];
+        let repo_id = server.env.iter().find(|e| e.name == "PILOT_REPO_ID");
+        let workspace = server.env.iter().find(|e| e.name == "PILOT_REPO_WORKSPACE");
+        assert_eq!(repo_id.map(|e| e.value.as_str()), Some("ivu-smp"));
+        assert_eq!(workspace.map(|e| e.value.as_str()), Some("/tmp/ivu-smp"));
     }
 
     #[test]
@@ -5228,6 +5260,7 @@ mod error_outcome_emission_tests {
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
             system_prompt: None,
+            auto_publish_response_fallback: false,
             team_instructions: None,
             initial_message: None,
             subscribe_mode: config::SubscribeMode::All,
