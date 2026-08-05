@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use axum::extract::ws::Message as WsMessage;
+use axum::http::StatusCode;
 use tracing::{debug, info, warn};
 
 use crate::connection::{AuthState, ConnectionState};
@@ -33,6 +34,24 @@ pub fn extract_auth_tag_json(event: &nostr::Event) -> Option<String> {
         return None; // NIP-OA spec: treat >1 auth tag as no valid auth tag
     }
     serde_json::to_string(first.as_slice()).ok()
+}
+
+/// Close a connection over a transient infrastructure fault WITHOUT sending
+/// an AUTH `OK false`.
+///
+/// Official desktop clients latch any AUTH rejection as terminal and stop
+/// auto-reconnecting until the user manually re-engages — a DB blip must
+/// never be delivered as one. A NOTICE followed by an immediate close is
+/// treated as an ordinary connection failure instead, so the client's
+/// backoff reconnect loop keeps running and recovers once the fault clears.
+async fn close_for_transient_fault(conn: &ConnectionState, notice: &str) {
+    *conn.auth_state.write().await = AuthState::Failed;
+    // Route via the control channel so the send loop drains the NOTICE ahead
+    // of the Close it emits on cancel.
+    let _ = conn
+        .ctrl_tx
+        .try_send(WsMessage::Text(RelayMessage::notice(notice).into()));
+    conn.cancel.cancel();
 }
 
 /// Handle a NIP-42 AUTH message: verify the challenge response and transition
@@ -154,32 +173,39 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     }
                 }
 
-                let denial: Option<(&str, &str)> = match outcome {
-                    BanOutcome::Clear => None,
+                match outcome {
+                    BanOutcome::Clear => {}
                     BanOutcome::Banned => {
-                        Some(("banned", "blocked: you are banned from this community"))
+                        let deny_reason = "blocked: you are banned from this community";
+                        warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), reason = deny_reason, "principal denied at ban seam");
+                        metrics::counter!("buzz_auth_failures_total", "reason" => "banned")
+                            .increment(1);
+                        *conn.auth_state.write().await = AuthState::Failed;
+                        // Decision 4: banned ⇒ OK false + immediate WebSocket close.
+                        // Route the reason frame on the control channel (not `send`,
+                        // which uses the data channel and would race the cancel), so
+                        // the send loop drains it ahead of the Close it emits on
+                        // cancel. Then cancel to close the socket immediately.
+                        let _ = conn.ctrl_tx.try_send(WsMessage::Text(
+                            RelayMessage::ok(&event_id_hex, false, deny_reason).into(),
+                        ));
+                        conn.cancel.cancel();
+                        return;
                     }
-                    BanOutcome::DbError => Some((
-                        "ban_check_error",
-                        "error: internal error checking restriction state",
-                    )),
-                };
-
-                if let Some((metric_reason, deny_reason)) = denial {
-                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), reason = deny_reason, "principal denied at ban seam");
-                    metrics::counter!("buzz_auth_failures_total", "reason" => metric_reason)
-                        .increment(1);
-                    *conn.auth_state.write().await = AuthState::Failed;
-                    // Decision 4: banned ⇒ OK false + immediate WebSocket close.
-                    // Route the reason frame on the control channel (not `send`,
-                    // which uses the data channel and would race the cancel), so
-                    // the send loop drains it ahead of the Close it emits on
-                    // cancel. Then cancel to close the socket immediately.
-                    let _ = conn.ctrl_tx.try_send(WsMessage::Text(
-                        RelayMessage::ok(&event_id_hex, false, deny_reason).into(),
-                    ));
-                    conn.cancel.cancel();
-                    return;
+                    BanOutcome::DbError => {
+                        // Transient fault, not an identity rejection — deny this
+                        // connection fail-closed, but never as an AUTH `OK false`.
+                        warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
+                              "ban-state lookup unavailable — closing without AUTH rejection");
+                        metrics::counter!("buzz_auth_failures_total", "reason" => "ban_check_error")
+                            .increment(1);
+                        close_for_transient_fault(
+                            &conn,
+                            "error: internal error checking restriction state",
+                        )
+                        .await;
+                        return;
+                    }
                 }
             }
 
@@ -187,29 +213,38 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             if state.config.pubkey_allowlist_enabled
                 && auth_ctx.auth_method == buzz_auth::AuthMethod::Nip42
             {
-                let allowed = match state
+                match state
                     .db
                     .is_pubkey_allowed(conn.tenant.community(), pubkey.as_bytes())
                     .await
                 {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = %e,
-                              "allowlist DB lookup failed, denying (fail-closed)");
-                        false
+                    Ok(true) => {}
+                    Ok(false) => {
+                        warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
+                        metrics::counter!("buzz_auth_failures_total", "reason" => "allowlist_denied")
+                            .increment(1);
+                        *conn.auth_state.write().await = AuthState::Failed;
+                        conn.send(RelayMessage::ok(
+                            &event_id_hex,
+                            false,
+                            "auth-required: verification failed",
+                        ));
+                        return;
                     }
-                };
-                if !allowed {
-                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
-                    metrics::counter!("buzz_auth_failures_total", "reason" => "allowlist_denied")
-                        .increment(1);
-                    *conn.auth_state.write().await = AuthState::Failed;
-                    conn.send(RelayMessage::ok(
-                        &event_id_hex,
-                        false,
-                        "auth-required: verification failed",
-                    ));
-                    return;
+                    Err(e) => {
+                        // Fail closed on this connection, but as a transient
+                        // fault (NOTICE + close), never as an AUTH rejection.
+                        warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = %e,
+                              "allowlist lookup unavailable — closing without AUTH rejection");
+                        metrics::counter!("buzz_auth_failures_total", "reason" => "allowlist_check_error")
+                            .increment(1);
+                        close_for_transient_fault(
+                            &conn,
+                            "error: internal error checking allowlist",
+                        )
+                        .await;
+                        return;
+                    }
                 }
             }
 
@@ -223,8 +258,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             .await
             {
                 Ok(owner) => owner,
-                Err(e) => {
-                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = ?e, "not a relay member");
+                Err((status, _)) if status == StatusCode::FORBIDDEN => {
+                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "not a relay member");
                     metrics::counter!("buzz_auth_failures_total", "reason" => "not_relay_member")
                         .increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;
@@ -233,6 +268,21 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         false,
                         "restricted: not a relay member",
                     ));
+                    return;
+                }
+                Err(e) => {
+                    // Non-403 means the membership check itself errored (e.g.
+                    // DB unavailable) — a transient fault, not a denial of this
+                    // identity. Same rule as the ban seam: NOTICE + close.
+                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = ?e,
+                          "membership check unavailable — closing without AUTH rejection");
+                    metrics::counter!("buzz_auth_failures_total", "reason" => "membership_check_error")
+                        .increment(1);
+                    close_for_transient_fault(
+                        &conn,
+                        "error: internal error checking relay membership",
+                    )
+                    .await;
                     return;
                 }
             };
