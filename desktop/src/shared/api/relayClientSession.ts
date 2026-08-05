@@ -46,6 +46,7 @@ import {
 import { RelayConnectionStateEmitter } from "@/shared/api/relayConnectionStateEmitter";
 import {
   isServiceRestartClose,
+  isTerminalAuthRejection,
   isWebSocketClose,
   shouldRefuseConnect,
   shouldScheduleReconnect,
@@ -897,7 +898,12 @@ export class RelayClient {
       } else {
         const error = new Error(message || "Relay authentication rejected.");
         authRequest.reject(error);
-        this.resetConnection(error, { reconnect: false });
+        // Only a genuine identity rejection latches the session terminal.
+        // Relay-internal faults (`error:`) and back-pressure (`rate-limited:`)
+        // keep the normal backoff reconnect loop running.
+        this.resetConnection(error, {
+          reconnect: !isTerminalAuthRejection(message),
+        });
       }
 
       return;

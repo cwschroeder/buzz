@@ -48,6 +48,28 @@ export function shouldRefuseConnect(inputs: { terminal: boolean }): boolean {
   return inputs.terminal;
 }
 
+/**
+ * Classify an AUTH `OK false` reason (NIP-01 machine-readable prefixes).
+ *
+ * The relay's ban/membership/allowlist gates fail closed on infrastructure
+ * faults and deny with an `error:` reason precisely so an innocent client is
+ * NOT told it was rejected — the relay expects a retry once the fault clears.
+ * `rate-limited:` is back-pressure and likewise transient. Latching the
+ * session terminal on those reasons would permanently stop auto-reconnect
+ * over a transient blip, stranding the user on manual reconnect clicks that
+ * keep failing until the fault clears.
+ *
+ * Everything else (`blocked:` ban, `restricted:` not a member,
+ * `auth-required:` verification failure, or a missing reason) is a genuine
+ * rejection of this identity: stay terminal until the user re-engages.
+ */
+export function isTerminalAuthRejection(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return !(
+    normalized.startsWith("error:") || normalized.startsWith("rate-limited:")
+  );
+}
+
 export function isWebSocketClose(
   message: unknown,
 ): message is { type: "Close"; data?: unknown } {

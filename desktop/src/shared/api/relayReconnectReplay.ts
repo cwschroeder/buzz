@@ -24,10 +24,18 @@ export const REPLAY_BATCH_SIZE = 8;
 /**
  * Delay between consecutive replay batches (milliseconds).
  *
- * Spreads the REQ storm across time so the relay's sliding quota window
- * can absorb each batch without triggering rate-limiting on the next.
+ * The relay's WS admission control is a FIXED 5-second window of
+ * `human_ws_events_per_sec × 5` requests per pubkey (50 with defaults) —
+ * not a sliding window. A short delay merely reorders the burst inside one
+ * window: a client with 20+ channels (2–3 REQs each) still blows the budget
+ * and the tail gets `CLOSED rate-limited`, which arms the client gate and
+ * delays full recovery far longer than honest pacing would. 8 REQs per
+ * second keeps replay at ≤40 per 5s window, leaving headroom for the paged
+ * history replays and channel-window refreshes that run alongside. The
+ * visible channel is sorted into the first batch, so the user's active view
+ * still recovers immediately.
  */
-export const REPLAY_INTER_BATCH_DELAY_MS = 50;
+export const REPLAY_INTER_BATCH_DELAY_MS = 1_000;
 
 async function runWithConcurrency<T>(
   items: T[],

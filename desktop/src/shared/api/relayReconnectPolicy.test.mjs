@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   isServiceRestartClose,
+  isTerminalAuthRejection,
   isWebSocketClose,
   shouldRefuseConnect,
   shouldScheduleReconnect,
@@ -94,6 +95,34 @@ test("ordinary operations wait for a scheduled reconnect instead of bypassing ba
 test("shouldRefuseConnect mirrors terminal", () => {
   assert.equal(shouldRefuseConnect({ terminal: false }), false);
   assert.equal(shouldRefuseConnect({ terminal: true }), true);
+});
+
+test("relay-internal auth errors are transient, not terminal", () => {
+  // The relay's ban/membership gates fail closed on a DB blip and deny with
+  // an `error:` reason, expecting the client to retry — latching terminal
+  // here would permanently stop auto-reconnect over a transient fault.
+  assert.equal(
+    isTerminalAuthRejection("error: internal error checking restriction state"),
+    false,
+  );
+  assert.equal(
+    isTerminalAuthRejection("rate-limited: quota exceeded; retry in 4s"),
+    false,
+  );
+});
+
+test("genuine auth rejections stay terminal", () => {
+  assert.equal(
+    isTerminalAuthRejection("blocked: you are banned from this community"),
+    true,
+  );
+  assert.equal(isTerminalAuthRejection("restricted: not a relay member"), true);
+  assert.equal(
+    isTerminalAuthRejection("auth-required: verification failed"),
+    true,
+  );
+  // No reason given — conservative: keep today's terminal behavior.
+  assert.equal(isTerminalAuthRejection(""), true);
 });
 
 test("only a close frame with code 1012 is a service restart", () => {

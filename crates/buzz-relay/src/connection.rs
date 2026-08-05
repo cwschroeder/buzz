@@ -24,7 +24,18 @@ use crate::state::{run_registered_community_connection, AppState};
 use buzz_pubsub::EventTopic;
 
 /// Maximum time a new socket may hold a connection slot without completing NIP-42 auth.
-const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+///
+/// The window starts after the WebSocket upgrade and must cover the full
+/// challenge round-trip: challenge delivery, client-side event signing (a
+/// keychain/IPC hop in the desktop app), and the AUTH reply — over paths
+/// that may include VPN/overlay hops or a machine that just woke from
+/// sleep. The previous 5 s cutoff undercut the desktop client's own 25 s
+/// auth budget and produced steady auth-timeout churn on slow paths: each
+/// cut connection costs the client a full reconnect cycle with doubled
+/// backoff. Slots are still bounded by the connection semaphore, so a
+/// longer window only delays reaping of silent sockets, it does not admit
+/// more of them.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Shared mutable subscription map for a single WebSocket connection.
 pub(crate) type ConnectionSubscriptions = Arc<Mutex<HashMap<String, Vec<Filter>>>>;
