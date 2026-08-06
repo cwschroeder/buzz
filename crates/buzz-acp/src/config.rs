@@ -323,6 +323,16 @@ pub struct CliArgs {
     )]
     pub heartbeat_prompt_file: Option<PathBuf>,
 
+    /// Optional executable run before an idle heartbeat. Exit 0 permits the
+    /// heartbeat; exit 1 means there is no work; every other result fails closed.
+    #[arg(long, env = "BUZZ_ACP_HEARTBEAT_PRECHECK_COMMAND")]
+    pub heartbeat_precheck_command: Option<PathBuf>,
+
+    /// Optional executable that receives a successful heartbeat turn's final
+    /// assistant text on stdin. Intended for deterministic recovery publishing.
+    #[arg(long, env = "BUZZ_ACP_HEARTBEAT_RESPONSE_COMMAND")]
+    pub heartbeat_response_command: Option<PathBuf>,
+
     #[arg(long, env = "BUZZ_ACP_INITIAL_MESSAGE")]
     pub initial_message: Option<String>,
 
@@ -513,6 +523,8 @@ pub struct Config {
     /// crash-backstop signal.
     pub turn_liveness_secs: u64,
     pub heartbeat_prompt: Option<String>,
+    pub heartbeat_precheck_command: Option<PathBuf>,
+    pub heartbeat_response_command: Option<PathBuf>,
     pub system_prompt: Option<String>,
     /// Owner-only safety net for agents that return useful text without
     /// executing the required Buzz publish tool.
@@ -1079,6 +1091,8 @@ impl Config {
             heartbeat_interval_secs: heartbeat_interval,
             turn_liveness_secs,
             heartbeat_prompt,
+            heartbeat_precheck_command: args.heartbeat_precheck_command,
+            heartbeat_response_command: args.heartbeat_response_command,
             system_prompt,
             auto_publish_response_fallback: args.auto_publish_response_fallback,
             team_instructions: args
@@ -1460,6 +1474,8 @@ mod tests {
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
+            heartbeat_precheck_command: None,
+            heartbeat_response_command: None,
             system_prompt: None,
             auto_publish_response_fallback: false,
             team_instructions: None,
@@ -2563,6 +2579,28 @@ channels = "ALL"
     }
 
     // ── Multiple-event-handling validation + default ──────────────────────────
+
+    #[test]
+    fn heartbeat_recovery_commands_parse_as_paths() {
+        let key = "0".repeat(64);
+        let args = CliArgs::parse_from([
+            "buzz-acp",
+            "--private-key",
+            &key,
+            "--heartbeat-precheck-command",
+            "/tmp/recovery-precheck",
+            "--heartbeat-response-command",
+            "/tmp/recovery-response",
+        ]);
+        assert_eq!(
+            args.heartbeat_precheck_command,
+            Some(PathBuf::from("/tmp/recovery-precheck"))
+        );
+        assert_eq!(
+            args.heartbeat_response_command,
+            Some(PathBuf::from("/tmp/recovery-response"))
+        );
+    }
 
     #[test]
     fn test_multiple_event_handling_default_is_steer() {

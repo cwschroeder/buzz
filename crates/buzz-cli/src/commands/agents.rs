@@ -1,12 +1,14 @@
-use buzz_core::kind::KIND_IA_ARCHIVED_LIST;
+use std::collections::BTreeSet;
+
+use buzz_core::kind::{KIND_AGENT_PROFILE, KIND_IA_ARCHIVED_LIST};
 use buzz_sdk::builders::{build_archive_identity_request, build_unarchive_identity_request};
-use nostr::PublicKey;
+use nostr::{EventBuilder, Kind, PublicKey};
 use serde_json::json;
 
 use crate::agent_management::{build_create, build_update, CreateAgentDraft, UpdateAgentDraft};
-use crate::client::BuzzClient;
+use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
-use crate::validate::{read_or_stdin, validate_hex64};
+use crate::validate::{read_or_stdin, validate_hex64, validate_uuid};
 use crate::{AgentsCmd, RespondToArg};
 
 pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), CliError> {
@@ -85,6 +87,15 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
             Ok(())
         }
 
+        AgentsCmd::ProfileSet {
+            name,
+            channels,
+            channel_ids,
+            allow_pubkeys,
+        } => cmd_profile_set(client, &name, channels, channel_ids, allow_pubkeys).await,
+
+        AgentsCmd::ProfileGet { pubkey } => cmd_profile_get(client, pubkey.as_deref()).await,
+
         AgentsCmd::Archive {
             target_pubkey,
             reason,
@@ -149,6 +160,109 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
 
         AgentsCmd::Archived => cmd_archived(client).await,
     }
+}
+
+fn agent_profile_content(
+    name: &str,
+    channels: Vec<String>,
+    channel_ids: Vec<String>,
+    allow_pubkeys: Vec<String>,
+) -> Result<serde_json::Value, CliError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CliError::Usage(
+            "agent profile name must not be empty".into(),
+        ));
+    }
+
+    let mut normalized_channel_ids = BTreeSet::new();
+    for channel_id in channel_ids {
+        validate_uuid(&channel_id)?;
+        normalized_channel_ids.insert(channel_id.to_ascii_lowercase());
+    }
+    if normalized_channel_ids.is_empty() {
+        return Err(CliError::Usage(
+            "agent profile requires at least one --channel-id".into(),
+        ));
+    }
+
+    let mut normalized_allowlist = BTreeSet::new();
+    for pubkey in allow_pubkeys {
+        validate_hex64(&pubkey)?;
+        normalized_allowlist.insert(pubkey.to_ascii_lowercase());
+    }
+    if normalized_allowlist.is_empty() {
+        return Err(CliError::Usage(
+            "agent profile requires at least one --allow-pubkey".into(),
+        ));
+    }
+
+    let channel_ids: Vec<String> = normalized_channel_ids.into_iter().collect();
+    let channels: Vec<String> = channels
+        .into_iter()
+        .map(|channel| channel.trim().to_string())
+        .filter(|channel| !channel.is_empty())
+        .collect();
+
+    Ok(json!({
+        "name": name,
+        "agent_type": "agent",
+        "channels": channels,
+        "channel_ids": channel_ids,
+        "capabilities": ["repo-agent", "scout", "review"],
+        "status": "online",
+        "respond_to": "allowlist",
+        "respond_to_allowlist": normalized_allowlist.into_iter().collect::<Vec<_>>(),
+        "channel_add_policy": "owner_only",
+    }))
+}
+
+async fn cmd_profile_set(
+    client: &BuzzClient,
+    name: &str,
+    channels: Vec<String>,
+    channel_ids: Vec<String>,
+    allow_pubkeys: Vec<String>,
+) -> Result<(), CliError> {
+    let content = agent_profile_content(name, channels, channel_ids, allow_pubkeys)?;
+    let builder = EventBuilder::new(Kind::Custom(KIND_AGENT_PROFILE as u16), content.to_string());
+    let event = client.sign_event(builder)?;
+    let response = client.submit_event(event).await?;
+    println!("{}", normalize_write_response(&response));
+    Ok(())
+}
+
+async fn cmd_profile_get(client: &BuzzClient, pubkey: Option<&str>) -> Result<(), CliError> {
+    let pubkey = pubkey
+        .map(str::to_string)
+        .unwrap_or_else(|| client.keys().public_key().to_hex());
+    validate_hex64(&pubkey)?;
+    let pubkey = pubkey.to_ascii_lowercase();
+    let raw = client
+        .query(&json!({"kinds": [KIND_AGENT_PROFILE], "authors": [pubkey], "limit": 1}))
+        .await?;
+    let events: Vec<serde_json::Value> = serde_json::from_str(&raw)
+        .map_err(|error| CliError::Other(format!("invalid agent profile response: {error}")))?;
+    let profiles: Vec<serde_json::Value> = events
+        .into_iter()
+        .map(|event| {
+            let mut content = event
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .unwrap_or_else(|| json!({}));
+            if let Some(object) = content.as_object_mut() {
+                for field in ["id", "pubkey", "created_at"] {
+                    if let Some(value) = event.get(field) {
+                        object.insert(field.to_string(), value.clone());
+                    }
+                }
+            }
+            content
+        })
+        .collect();
+    println!("{}", json!({"profiles": profiles}));
+    Ok(())
 }
 
 /// Require `BUZZ_AUTH_TAG` and parse the owner pubkey from it. Used only by
@@ -393,6 +507,42 @@ mod tests {
 
     fn hex128(c: char) -> String {
         std::iter::repeat_n(c, 128).collect()
+    }
+
+    #[test]
+    fn agent_profile_content_normalizes_and_deduplicates_acl() {
+        let allowed = hex64('a');
+        let content = agent_profile_content(
+            "  Alpha Repo-Agent  ",
+            vec!["alpha-agent".into()],
+            vec![
+                "11111111-1111-1111-1111-111111111111".into(),
+                "11111111-1111-1111-1111-111111111111".into(),
+            ],
+            vec![allowed.to_uppercase(), allowed.clone()],
+        )
+        .expect("valid agent profile");
+
+        assert_eq!(content["name"], "Alpha Repo-Agent");
+        assert_eq!(content["respond_to"], "allowlist");
+        assert_eq!(content["respond_to_allowlist"], json!([allowed]));
+        assert_eq!(
+            content["channel_ids"],
+            json!(["11111111-1111-1111-1111-111111111111"])
+        );
+        assert_eq!(content["channel_add_policy"], "owner_only");
+    }
+
+    #[test]
+    fn agent_profile_content_rejects_invalid_acl_pubkey() {
+        let error = agent_profile_content(
+            "Alpha Repo-Agent",
+            vec![],
+            vec!["11111111-1111-1111-1111-111111111111".into()],
+            vec!["not-a-pubkey".into()],
+        )
+        .expect_err("invalid pubkey must fail closed");
+        assert!(error.to_string().contains("64-character"));
     }
 
     // --- (b) auth-selection matrix: extract_owner_auth_tag ---

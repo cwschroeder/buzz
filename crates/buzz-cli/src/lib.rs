@@ -296,6 +296,27 @@ pub enum AgentsCmd {
         #[arg(long, value_enum)]
         respond_to: Option<RespondToArg>,
     },
+    /// Publish this identity's relay agent profile (kind 10100)
+    ProfileSet {
+        /// Agent name shown in remote mention autocomplete
+        #[arg(long)]
+        name: String,
+        /// Human-readable channel name; repeat for multiple channels
+        #[arg(long = "channel")]
+        channels: Vec<String>,
+        /// Channel UUID the agent listens to; repeat for multiple channels
+        #[arg(long = "channel-id", required = true)]
+        channel_ids: Vec<String>,
+        /// Human pubkey allowed to trigger this agent; repeat as needed
+        #[arg(long = "allow-pubkey", required = true)]
+        allow_pubkeys: Vec<String>,
+    },
+    /// Read relay agent profiles (kind 10100)
+    ProfileGet {
+        /// Agent pubkey; defaults to the current signing identity
+        #[arg(long)]
+        pubkey: Option<String>,
+    },
     /// Submit a NIP-IA archive request for an identity (kind 9035)
     #[command(
         after_help = "The relay chooses the consent path (self / admin / owner) from the \
@@ -2150,6 +2171,8 @@ mod tests {
                 "archived",
                 "draft-create",
                 "draft-update",
+                "profile-get",
+                "profile-set",
                 "unarchive"
             ]
         );
@@ -2288,7 +2311,7 @@ mod tests {
     #[test]
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
-            ("agents", 5),
+            ("agents", 7),
             ("canvas", 2),
             ("channels", 16),
             ("dms", 4),

@@ -1597,6 +1597,7 @@ async fn tokio_main() -> Result<()> {
             Some(include_str!("base_prompt.md"))
         },
         heartbeat_prompt: config.heartbeat_prompt.clone(),
+        heartbeat_response_command: config.heartbeat_response_command.clone(),
         cwd: std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("/"))
             .to_string_lossy()
@@ -2385,9 +2386,12 @@ async fn tokio_main() -> Result<()> {
                         {
                             typing_channels.insert(channel_id, thread_tags);
                         }
-                    } else if pool.any_idle() {
+                } else if pool.any_idle() {
+                    if heartbeat_precheck_allows(config.heartbeat_precheck_command.as_deref()).await
+                    {
                         dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
-                    } else {
+                    }
+                } else {
                         tracing::debug!("heartbeat_skipped_busy");
                     }
                     None
@@ -3706,6 +3710,89 @@ fn dispatch_heartbeat(
     );
     *heartbeat_in_flight = true;
     tracing::info!(agent = agent_index, "heartbeat_fired");
+}
+
+/// Gate model-backed idle heartbeats behind a cheap deterministic executable.
+///
+/// Exit 0 means work exists. Exit 1 is the expected idle result. Spawn errors,
+/// unexpected exit codes, and timeouts fail closed so a broken precheck cannot
+/// create an idle LLM request storm.
+async fn heartbeat_precheck_allows(command: Option<&std::path::Path>) -> bool {
+    let Some(command) = command else {
+        return true;
+    };
+
+    let mut child = match tokio::process::Command::new(command)
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            tracing::warn!(
+                command = %command.display(),
+                %error,
+                "heartbeat precheck could not start; skipping heartbeat"
+            );
+            return false;
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(Ok(status)) if status.success() => true,
+        Ok(Ok(status)) if status.code() == Some(1) => {
+            tracing::debug!(
+                command = %command.display(),
+                "heartbeat precheck found no work"
+            );
+            false
+        }
+        Ok(Ok(status)) => {
+            tracing::warn!(
+                command = %command.display(),
+                ?status,
+                "heartbeat precheck failed; skipping heartbeat"
+            );
+            false
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(
+                command = %command.display(),
+                %error,
+                "heartbeat precheck wait failed; skipping heartbeat"
+            );
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                command = %command.display(),
+                "heartbeat precheck timed out after 10s; skipping heartbeat"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod heartbeat_precheck_tests {
+    use super::heartbeat_precheck_allows;
+    use std::path::Path;
+
+    #[tokio::test]
+    async fn no_precheck_preserves_legacy_heartbeat_behavior() {
+        assert!(heartbeat_precheck_allows(None).await);
+    }
+
+    #[tokio::test]
+    async fn precheck_exit_status_gates_heartbeat_fail_closed() {
+        assert!(heartbeat_precheck_allows(Some(Path::new("true"))).await);
+        assert!(!heartbeat_precheck_allows(Some(Path::new("false"))).await);
+        assert!(
+            !heartbeat_precheck_allows(Some(Path::new(
+                "buzz-acp-definitely-missing-precheck"
+            )))
+            .await
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5121,6 +5208,8 @@ mod build_mcp_servers_tests {
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
+            heartbeat_precheck_command: None,
+            heartbeat_response_command: None,
             system_prompt: None,
             auto_publish_response_fallback: false,
             team_instructions: None,
@@ -5361,6 +5450,8 @@ mod error_outcome_emission_tests {
             heartbeat_interval_secs: 0,
             turn_liveness_secs: 10,
             heartbeat_prompt: None,
+            heartbeat_precheck_command: None,
+            heartbeat_response_command: None,
             system_prompt: None,
             auto_publish_response_fallback: false,
             team_instructions: None,

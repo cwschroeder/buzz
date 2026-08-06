@@ -530,6 +530,8 @@ pub struct PromptContext {
     pub auto_publish_response_fallback: bool,
     pub team_instructions: Option<String>,
     pub heartbeat_prompt: Option<String>,
+    /// Optional deterministic publisher for successful heartbeat response text.
+    pub heartbeat_response_command: Option<std::path::PathBuf>,
     /// Base prompt content, or `None` if `--no-base-prompt` was passed.
     ///
     /// `'static` because `PromptContext` is `Arc`-shared across async tasks.
@@ -2148,6 +2150,10 @@ pub async fn run_prompt_task(
                 if let Some(batch) = batch.as_ref() {
                     publish_owner_response_fallback(&ctx, batch, &fallback_text).await;
                 }
+            }
+
+            if matches!(source, PromptSource::Heartbeat) {
+                publish_heartbeat_response_fallback(&ctx, &fallback_text).await;
             }
 
             let should_rotate = matches!(
@@ -3814,6 +3820,105 @@ async fn publish_agent_turn_metric(
             session_id,
             turn_id,
             "NIP-AM: publish timed out"
+        ),
+    }
+}
+
+/// Publish a successful recovery heartbeat's final text through a deterministic
+/// exactly-once wrapper. Empty or explicit idle responses never publish.
+async fn publish_heartbeat_response_fallback(ctx: &PromptContext, content: &str) {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    let Some(command) = ctx.heartbeat_response_command.as_deref() else {
+        return;
+    };
+    let content = content.trim();
+    if content == "RECOVERY_IDLE" {
+        return;
+    }
+    let content = if content.is_empty() {
+        "Blocker: Der automatische Recovery-Turn endete ohne veröffentlichbare Antwort. Die Anfrage wurde erkannt, benötigt aber eine erneute oder manuelle Prüfung."
+    } else {
+        content
+    };
+    let content: String = content.chars().take(4000).collect();
+
+    let mut child = match tokio::process::Command::new(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                command = %command.display(),
+                %error,
+                "heartbeat response command could not start"
+            );
+            return;
+        }
+    };
+
+    let Some(mut stdin) = child.stdin.take() else {
+        tracing::warn!(
+            target: "pool::response_fallback",
+            command = %command.display(),
+            "heartbeat response command stdin unavailable"
+        );
+        return;
+    };
+    match tokio::time::timeout(Duration::from_secs(5), stdin.write_all(content.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                command = %command.display(),
+                %error,
+                "heartbeat response command stdin write failed"
+            );
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "pool::response_fallback",
+                command = %command.display(),
+                "heartbeat response command stdin write timed out"
+            );
+            return;
+        }
+    }
+    drop(stdin);
+
+    match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(Ok(status)) if status.success() => tracing::info!(
+            target: "pool::response_fallback",
+            command = %command.display(),
+            "published heartbeat response fallback"
+        ),
+        Ok(Ok(status)) if status.code() == Some(1) => tracing::debug!(
+            target: "pool::response_fallback",
+            command = %command.display(),
+            "heartbeat response fallback no longer needed"
+        ),
+        Ok(Ok(status)) => tracing::warn!(
+            target: "pool::response_fallback",
+            command = %command.display(),
+            ?status,
+            "heartbeat response command failed"
+        ),
+        Ok(Err(error)) => tracing::warn!(
+            target: "pool::response_fallback",
+            command = %command.display(),
+            %error,
+            "heartbeat response command wait failed"
+        ),
+        Err(_) => tracing::warn!(
+            target: "pool::response_fallback",
+            command = %command.display(),
+            "heartbeat response command timed out after 10s"
         ),
     }
 }
@@ -6750,6 +6855,7 @@ mod tests {
             auto_publish_response_fallback: false,
             team_instructions: None,
             heartbeat_prompt: None,
+            heartbeat_response_command: None,
             base_prompt: None,
             cwd: ".".to_string(),
             rest_client: RestClient {
