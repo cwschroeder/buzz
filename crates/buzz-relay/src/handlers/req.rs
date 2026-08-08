@@ -854,19 +854,15 @@ fn filters_are_nip43_membership_only(filters: &[Filter]) -> bool {
         })
 }
 
-/// Extract a channel UUID from a single filter's `#h` tag.
+/// Extract a channel UUID from a single filter's sole `#h` tag value.
 fn extract_channel_id_from_filter(filter: &Filter) -> Option<uuid::Uuid> {
-    for (tag_key, tag_values) in filter.generic_tags.iter() {
-        let key = tag_key.to_string();
-        if key == "h" {
-            for val in tag_values {
-                if let Ok(id) = val.parse::<uuid::Uuid>() {
-                    return Some(id);
-                }
-            }
-        }
+    let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
+    let tag_values = filter.generic_tags.get(&h_tag)?;
+    if tag_values.len() != 1 {
+        return None;
     }
-    None
+
+    tag_values.iter().next()?.parse::<uuid::Uuid>().ok()
 }
 
 /// Convert a single NIP-01 filter into an [`EventQuery`] for the database.
@@ -1436,6 +1432,43 @@ mod tests {
             SingleLetterTag::lowercase(Alphabet::H),
             channel_id.to_string(),
         )
+    }
+
+    #[test]
+    fn single_filter_without_channel_has_no_channel_pushdown() {
+        assert_eq!(extract_channel_id_from_filter(&Filter::new()), None);
+    }
+
+    #[test]
+    fn single_filter_with_one_channel_uses_channel_pushdown() {
+        let channel_id = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            extract_channel_id_from_filter(&filter_with_channel(channel_id)),
+            Some(channel_id)
+        );
+    }
+
+    #[test]
+    fn single_filter_with_multiple_channels_has_no_channel_pushdown() {
+        let channel_a = uuid::Uuid::new_v4();
+        let channel_b = uuid::Uuid::new_v4();
+        let filter = Filter::new().custom_tags(
+            SingleLetterTag::lowercase(Alphabet::H),
+            [channel_a.to_string(), channel_b.to_string()],
+        );
+
+        assert_eq!(extract_channel_id_from_filter(&filter), None);
+    }
+
+    #[test]
+    fn single_filter_with_invalid_channel_has_no_channel_pushdown() {
+        let filter = Filter::new().custom_tags(
+            SingleLetterTag::lowercase(Alphabet::H),
+            ["not-a-channel-uuid"],
+        );
+
+        assert_eq!(extract_channel_id_from_filter(&filter), None);
     }
 
     /// NIP-11 `limitation.max_limit` as this relay actually advertises it.
