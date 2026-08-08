@@ -17,9 +17,11 @@ import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
 import '../../shared/widgets/anchored_popover_menu.dart';
+import '../../shared/widgets/bee_refresh_indicator.dart';
 import '../../shared/widgets/buzz_loading_indicator.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
+import '../../shared/widgets/modal_presentation.dart';
 import '../../shared/widgets/skeleton.dart';
 import '../../shared/custom_emoji/custom_emoji.dart';
 import '../../shared/custom_emoji/custom_emoji_provider.dart';
@@ -299,7 +301,7 @@ class ChannelsPage extends HookConsumerWidget {
     void openCommunitySwitcher() {
       unawaited(HapticFeedback.selectionClick());
       ref.invalidate(communityIconProvider);
-      showModalBottomSheet<void>(
+      showBuzzModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         builder: (_) => const _CommunitySwitcherSheet(),
