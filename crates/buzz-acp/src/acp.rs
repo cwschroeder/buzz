@@ -132,6 +132,26 @@ fn build_initialize_params() -> serde_json::Value {
     })
 }
 
+/// Keep only the newest logical assistant message for owner-response fallback.
+///
+/// ACP v2 identifies chunks with `messageId`. Repeated chunks for one message
+/// append; a new id starts a new assistant message and replaces any earlier
+/// tool-round narration. Id-less ACP v1 agents retain the legacy append
+/// behavior because there is no reliable boundary to infer.
+fn retain_latest_agent_message(
+    buffer: &mut String,
+    current_message_id: &mut Option<String>,
+    incoming_message_id: Option<&str>,
+) {
+    let Some(incoming_message_id) = incoming_message_id else {
+        return;
+    };
+    if current_message_id.as_deref() != Some(incoming_message_id) {
+        buffer.clear();
+        *current_message_id = Some(incoming_message_id.to_owned());
+    }
+}
+
 /// ACP client that owns an agent subprocess and communicates over its stdio.
 ///
 /// One `AcpClient` per agent process. Multiple sessions can be created on the
@@ -168,6 +188,13 @@ pub struct AcpClient {
     /// tool. The pool may consume this buffer only when the explicitly enabled
     /// owner-only response fallback is active.
     turn_agent_message: String,
+    /// ACP message id currently represented by `turn_agent_message`.
+    ///
+    /// A tool-using turn may emit a separate assistant message before every
+    /// tool round. The Buzz fallback must publish only the newest logical
+    /// message, not concatenate those intermediate narrations into one reply.
+    /// Chunks sharing an id still append normally.
+    turn_agent_message_id: Option<String>,
     /// Hard deadline for the current turn, set by `session_prompt_with_idle_timeout`.
     /// Inherited by `cancel_with_cleanup` so the drain loop shares the same budget
     /// rather than starting a fresh timer (prevents double-jeopardy).
@@ -549,6 +576,7 @@ impl AcpClient {
             permission_responded: false,
             last_prompt_id: None,
             turn_agent_message: String::new(),
+            turn_agent_message_id: None,
             current_hard_deadline: None,
             observer: None,
             observer_agent_index: None,
@@ -776,6 +804,7 @@ impl AcpClient {
         max_duration: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
         self.turn_agent_message.clear();
+        self.turn_agent_message_id = None;
         let params = build_prompt_params(session_id, prompt_blocks);
         let hard_deadline = tokio::time::Instant::now() + max_duration;
         self.current_hard_deadline = Some(hard_deadline);
@@ -891,6 +920,7 @@ impl AcpClient {
 
     /// Consume assistant text streamed during the most recent prompt turn.
     pub fn take_turn_agent_message(&mut self) -> String {
+        self.turn_agent_message_id = None;
         std::mem::take(&mut self.turn_agent_message)
     }
 
@@ -1745,6 +1775,11 @@ impl AcpClient {
         match update_type {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
+                    retain_latest_agent_message(
+                        &mut self.turn_agent_message,
+                        &mut self.turn_agent_message_id,
+                        update.get("messageId").and_then(|value| value.as_str()),
+                    );
                     self.turn_agent_message.push_str(text);
                     tracing::info!(target: "acp::stream", "{text}");
                 }
@@ -2273,6 +2308,46 @@ fn configure_no_window(cmd: &mut tokio::process::Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_fallback_appends_chunks_from_one_logical_message() {
+        let mut buffer = String::new();
+        let mut message_id = None;
+
+        retain_latest_agent_message(&mut buffer, &mut message_id, Some("final"));
+        buffer.push_str("Erster ");
+        retain_latest_agent_message(&mut buffer, &mut message_id, Some("final"));
+        buffer.push_str("Teil");
+
+        assert_eq!(buffer, "Erster Teil");
+        assert_eq!(message_id.as_deref(), Some("final"));
+    }
+
+    #[test]
+    fn response_fallback_replaces_intermediate_tool_round_message() {
+        let mut buffer = String::new();
+        let mut message_id = None;
+
+        retain_latest_agent_message(&mut buffer, &mut message_id, Some("round-1"));
+        buffer.push_str("Ich prüfe jetzt die Dateien.");
+        retain_latest_agent_message(&mut buffer, &mut message_id, Some("round-2"));
+        buffer.push_str("Ergebnis: Die Prüfung ist abgeschlossen.");
+
+        assert_eq!(buffer, "Ergebnis: Die Prüfung ist abgeschlossen.");
+        assert_eq!(message_id.as_deref(), Some("round-2"));
+    }
+
+    #[test]
+    fn response_fallback_keeps_legacy_idless_chunks() {
+        let mut buffer = String::from("Alt ");
+        let mut message_id = None;
+
+        retain_latest_agent_message(&mut buffer, &mut message_id, None);
+        buffer.push_str("kompatibel");
+
+        assert_eq!(buffer, "Alt kompatibel");
+        assert_eq!(message_id, None);
+    }
 
     #[test]
     fn stop_reason_parses_all_known_values() {

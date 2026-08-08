@@ -764,7 +764,9 @@ pub async fn delete_workflow(pool: &PgPool, community_id: CommunityId, id: Uuid)
 /// workflow just by learning its UUID.
 ///
 /// Returns the deleted workflow's `channel_id` so the caller can invalidate
-/// the per-channel trigger cache without a separate lookup.
+/// the per-channel trigger cache without a separate lookup. A missing row is
+/// an idempotent `Ok(None)`: the signed deletion may target a definition event
+/// left behind after a database rebuild.
 pub async fn delete_workflow_for_owner(
     pool: &PgPool,
     community_id: CommunityId,
@@ -783,7 +785,7 @@ pub async fn delete_workflow_for_owner(
 
     match row {
         Some(row) => Ok(row.try_get("channel_id")?),
-        None => Err(DbError::NotFound(format!("workflow {id}"))),
+        None => Ok(None),
     }
 }
 
@@ -2204,6 +2206,20 @@ mod tests {
             .expect("B's workflow must survive A's delete");
         assert_eq!(surviving_b.community_id, community_b);
         assert_eq!(surviving_b.name, "wf-B");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn owner_scoped_workflow_delete_is_idempotent_when_row_is_absent() {
+        let pool = setup_pool().await;
+        let community = make_community(&pool).await;
+        let owner = vec![0xb2; 32];
+
+        let deleted = delete_workflow_for_owner(&pool, community, Uuid::new_v4(), &owner)
+            .await
+            .expect("an absent workflow row must not block its definition tombstone");
+
+        assert_eq!(deleted, None);
     }
 
     /// Issue 4 (approval path): the same approval token can hash to the same
