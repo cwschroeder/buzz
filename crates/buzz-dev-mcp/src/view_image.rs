@@ -283,30 +283,83 @@ fn server_authority(url: &reqwest::Url) -> Option<String> {
     }
 }
 
-/// Mint a `t=get` Authorization header for `url` when it is relay-hosted
-/// media and `BUZZ_PRIVATE_KEY` is available; `None` otherwise.
+/// A signing key plus the NIP-OA auth tag that belongs to the same identity.
+struct MediaCredential {
+    /// Name of the env var the key came from, for error messages.
+    var: &'static str,
+    key: String,
+    auth_tag: Option<String>,
+}
+
+fn non_blank(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.trim().is_empty())
+}
+
+/// Pick the credential for media reads, preferring the `BUZZ_MEDIA_*` pair.
+///
+/// Key and auth tag are chosen together, never mixed: a relay that enforces
+/// membership rejects a signature whose auth tag belongs to someone else, and
+/// a silent cross-identity pairing would be hard to diagnose. Blank values
+/// count as absent so an exported-but-empty variable falls through instead of
+/// failing the parse below.
+fn select_media_credential(
+    media_key: Option<String>,
+    media_auth_tag: Option<String>,
+    private_key: Option<String>,
+    auth_tag: Option<String>,
+) -> Option<MediaCredential> {
+    if let Some(key) = non_blank(media_key) {
+        return Some(MediaCredential {
+            var: "BUZZ_MEDIA_KEY",
+            key,
+            auth_tag: non_blank(media_auth_tag),
+        });
+    }
+    non_blank(private_key).map(|key| MediaCredential {
+        var: "BUZZ_PRIVATE_KEY",
+        key,
+        auth_tag: non_blank(auth_tag),
+    })
+}
+
+/// Mint a `t=get` Authorization header plus matching auth tag for `url` when it
+/// is relay-hosted media and a signing key is available; `None` otherwise.
+///
+/// Prefers `BUZZ_MEDIA_KEY` / `BUZZ_MEDIA_AUTH_TAG` over `BUZZ_PRIVATE_KEY` /
+/// `BUZZ_AUTH_TAG`. Hosts that must not hand their signing identity to shell
+/// children (shell.rs inherits the process env for the `buzz` CLI) can set the
+/// media pair instead: it authenticates media reads here but is stripped from
+/// every spawned shell.
 ///
 /// Fail-open by design: while the relay's media-read-auth flag is off, an
 /// unauthenticated request still succeeds, so a missing/invalid key degrades
 /// to an unsigned fetch instead of an error. Once the flag is on, the fetch
 /// 403s and the error path below names the missing key.
-fn relay_media_get_auth(url: &reqwest::Url) -> Option<String> {
+fn relay_media_get_auth(url: &reqwest::Url) -> Option<(String, Option<String>)> {
     let relay = std::env::var("BUZZ_RELAY_URL").ok()?;
     let relay = reqwest::Url::parse(&relay).ok()?;
     if !is_relay_media_url(url, &relay) {
         return None;
     }
-    let key = std::env::var("BUZZ_PRIVATE_KEY").ok()?;
-    let keys = match nostr::Keys::parse(&key) {
+    let credential = select_media_credential(
+        std::env::var("BUZZ_MEDIA_KEY").ok(),
+        std::env::var("BUZZ_MEDIA_AUTH_TAG").ok(),
+        std::env::var("BUZZ_PRIVATE_KEY").ok(),
+        std::env::var("BUZZ_AUTH_TAG").ok(),
+    )?;
+    let keys = match nostr::Keys::parse(&credential.key) {
         Ok(k) => k,
         Err(e) => {
-            tracing::warn!("BUZZ_PRIVATE_KEY invalid; fetching relay media unauthenticated: {e}");
+            tracing::warn!(
+                "{} invalid; fetching relay media unauthenticated: {e}",
+                credential.var
+            );
             return None;
         }
     };
     let authority = server_authority(url)?;
     match sign_media_get_auth(&keys, &authority) {
-        Ok(header) => Some(header),
+        Ok(header) => Some((header, credential.auth_tag)),
         Err(e) => {
             tracing::warn!("media get auth signing failed; fetching unauthenticated: {e}");
             None
@@ -317,7 +370,7 @@ fn relay_media_get_auth(url: &reqwest::Url) -> Option<String> {
 /// Fetch an http(s) URL with a streaming read and a hard byte cap.
 /// Refuses up-front if `Content-Length` advertises more than the cap.
 /// Relay-hosted `/media/` URLs get a signed Blossom `t=get` header when
-/// `BUZZ_RELAY_URL` + `BUZZ_PRIVATE_KEY` are configured.
+/// `BUZZ_RELAY_URL` + (`BUZZ_MEDIA_KEY` or `BUZZ_PRIVATE_KEY`) are configured.
 async fn fetch_url(url: &str) -> Result<Vec<u8>, ErrorData> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| invalid_params(format!("invalid URL: {url} ({e})")))?;
@@ -336,12 +389,10 @@ async fn fetch_url(url: &str) -> Result<Vec<u8>, ErrorData> {
         .map_err(|e| ErrorData::internal_error(format!("http client init failed: {e}"), None))?;
     let mut req = client.get(parsed);
     let authed = auth.is_some();
-    if let Some(header) = auth {
+    if let Some((header, auth_tag)) = auth {
         req = req.header("Authorization", header);
-        if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
-            if !auth_tag.trim().is_empty() {
-                req = req.header("x-auth-tag", auth_tag);
-            }
+        if let Some(auth_tag) = auth_tag {
+            req = req.header("x-auth-tag", auth_tag);
         }
     }
     let resp = req
@@ -353,7 +404,8 @@ async fn fetch_url(url: &str) -> Result<Vec<u8>, ErrorData> {
         if matches!(status.as_u16(), 401 | 403) && !authed {
             return Err(invalid_params(format!(
                 "fetch {url} returned HTTP {status} — this relay requires authenticated media \
-                 reads; set BUZZ_PRIVATE_KEY (and BUZZ_RELAY_URL) to a member identity"
+                 reads; set BUZZ_MEDIA_KEY or BUZZ_PRIVATE_KEY (and BUZZ_RELAY_URL) to a \
+                 member identity"
             )));
         }
         return Err(invalid_params(format!(
@@ -1057,6 +1109,68 @@ mod tests {
 
     fn u(s: &str) -> reqwest::Url {
         reqwest::Url::parse(s).unwrap()
+    }
+
+    fn credential(
+        media_key: Option<&str>,
+        media_tag: Option<&str>,
+        private_key: Option<&str>,
+        auth_tag: Option<&str>,
+    ) -> Option<(&'static str, String, Option<String>)> {
+        select_media_credential(
+            media_key.map(str::to_string),
+            media_tag.map(str::to_string),
+            private_key.map(str::to_string),
+            auth_tag.map(str::to_string),
+        )
+        .map(|c| (c.var, c.key, c.auth_tag))
+    }
+
+    #[test]
+    fn media_credential_takes_precedence_over_private_key() {
+        // A host that withholds BUZZ_PRIVATE_KEY from shell children must still
+        // be able to authenticate media reads via the media pair.
+        assert_eq!(
+            credential(Some("mk"), Some("mt"), Some("pk"), Some("pt")),
+            Some(("BUZZ_MEDIA_KEY", "mk".into(), Some("mt".into())))
+        );
+        // Without a media key the previous behaviour is unchanged.
+        assert_eq!(
+            credential(None, None, Some("pk"), Some("pt")),
+            Some(("BUZZ_PRIVATE_KEY", "pk".into(), Some("pt".into())))
+        );
+        assert_eq!(credential(None, None, None, None), None);
+    }
+
+    #[test]
+    fn media_credential_never_mixes_identities() {
+        // The relay rejects a signature whose auth tag belongs to another
+        // identity, so a media key must never borrow BUZZ_AUTH_TAG.
+        assert_eq!(
+            credential(Some("mk"), None, Some("pk"), Some("pt")),
+            Some(("BUZZ_MEDIA_KEY", "mk".into(), None))
+        );
+        // ...and a fallback to the private key must not pick up the media tag.
+        assert_eq!(
+            credential(None, Some("mt"), Some("pk"), None),
+            Some(("BUZZ_PRIVATE_KEY", "pk".into(), None))
+        );
+    }
+
+    #[test]
+    fn media_credential_treats_blank_as_absent() {
+        // Exported-but-empty must not shadow a usable key, and must not reach
+        // the key parser as a bogus value.
+        assert_eq!(
+            credential(Some("   "), None, Some("pk"), Some("pt")),
+            Some(("BUZZ_PRIVATE_KEY", "pk".into(), Some("pt".into())))
+        );
+        assert_eq!(credential(Some(""), None, None, None), None);
+        // A blank tag becomes None rather than an empty x-auth-tag header.
+        assert_eq!(
+            credential(Some("mk"), Some("  "), None, None),
+            Some(("BUZZ_MEDIA_KEY", "mk".into(), None))
+        );
     }
 
     #[test]

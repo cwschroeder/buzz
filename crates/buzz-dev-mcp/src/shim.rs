@@ -14,6 +14,8 @@ use zeroize::Zeroize;
 /// Shell children receive `path_env`, `git_env`, and `BUZZ_PRIVATE_KEY` (for
 /// the buzz CLI). `NOSTR_PRIVATE_KEY` is removed from the process env after
 /// the keyfile is written — git helpers read from the keyfile only.
+/// `BUZZ_MEDIA_KEY` stays in our env for media reads but is stripped from
+/// every spawned shell (shell.rs).
 /// Cleaned up on drop (TempDir).
 pub struct Shim {
     _dir: TempDir,

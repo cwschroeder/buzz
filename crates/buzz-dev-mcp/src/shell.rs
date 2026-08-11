@@ -169,6 +169,11 @@ pub async fn run(
     cmd.env("PATH", &state.shim.path_env);
     // NOSTR_PRIVATE_KEY is already removed from this process's env (shim.rs).
     // BUZZ_PRIVATE_KEY is intentionally inherited — the buzz CLI needs it.
+    // BUZZ_MEDIA_KEY is not: it exists so a host can authenticate media reads
+    // (view_image.rs) without handing that identity to shell children. It stays
+    // in our own env, so strip it per-command rather than process-wide.
+    cmd.env_remove("BUZZ_MEDIA_KEY");
+    cmd.env_remove("BUZZ_MEDIA_AUTH_TAG");
     for (k, v) in &state.shim.git_env {
         cmd.env(k, v);
     }
@@ -1003,6 +1008,32 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn media_key_is_not_visible_to_shell_children() {
+        // The media credential authenticates relay media reads inside this
+        // process (view_image.rs). Handing it to a shell child would defeat the
+        // point: the child could sign Buzz events as that identity.
+        std::env::set_var("BUZZ_MEDIA_KEY", "must-not-leak-key");
+        std::env::set_var("BUZZ_MEDIA_AUTH_TAG", "must-not-leak-tag");
+        let dir = tempdir().expect("tempdir");
+        let state = make_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "echo \"[${BUZZ_MEDIA_KEY:-unset}/${BUZZ_MEDIA_AUTH_TAG:-unset}]\"".into(),
+                workdir: None,
+                timeout_ms: Some(5_000),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("ok");
+        std::env::remove_var("BUZZ_MEDIA_KEY");
+        std::env::remove_var("BUZZ_MEDIA_AUTH_TAG");
+        let v = body(r);
+        assert_eq!(v["stdout"], "[unset/unset]\n");
+    }
+
+    #[tokio::test]
     async fn basic_echo() {
         let dir = tempdir().expect("tempdir");
         let state = make_state(dir.path());
