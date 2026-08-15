@@ -17,6 +17,7 @@ __pycache__/
 
 # Editor / IDE
 .idea/
+.serena/
 .vscode/*
 !.vscode/settings.json
 *.swp
