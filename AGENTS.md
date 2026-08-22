@@ -617,3 +617,24 @@ usage.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system design and component relationships
 - [RELEASING.md](RELEASING.md) — release process: `release-desktop`, `release-relay`, `scripts/mobile-release.sh`, candidate tags, internal builds
 - [README.md](README.md) — project overview and quick start
+
+<!-- project-doc-guardrails -->
+
+## Project layout - documentation and tasks (Bedeutung aller Dateien)
+
+These files are the project's source of truth; keep them current:
+
+| Path | Bedeutung |
+|------|-----------|
+| docs/PRODUCT.md | Produkt-/Business-Vertrag; gepflegt vom impeccable-Skill |
+| docs/DESIGN.md | Geliefertes Design-System; gepflegt vom impeccable-Skill |
+| docs/ARCHITECTURE.md | Software-Architektur (C4 + arc42); gepflegt mit c4-model-skill und arc42-documentation |
+| docs/DEPLOYMENT.md | Deployment-Runbook; aktueller Commit/Build; pflegt der deployende Agent |
+| docs/LEARNINGS.md | Quergedächtnis, append-only; Agenten tragen nach bedeutsamen Sessions Erkenntnisse ein |
+| tasks/tasks.md | Aufgaben-Backlog + Bearbeitungsstatus; komplexe Aufgaben verweisen auf tasks/<aufgabe>/ |
+| tasks/<aufgabe>/ | Unterordner für komplexe Aufgaben: Detail-Status, Protokoll, Artefakte |
+
+Konventionen: German knapp, echte Umlaute. LEARNINGS/tasks sind append-only,
+Einträge datieren und Agent-Namen führen, Korrekturen hängen an statt zu
+löschen
+<!-- /project-doc-guardrails -->
