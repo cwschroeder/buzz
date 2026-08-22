@@ -626,8 +626,8 @@ These files are the project's source of truth; keep them current:
 
 | Path | Bedeutung |
 |------|-----------|
-| docs/PRODUCT.md | Produkt-/Business-Vertrag; gepflegt vom impeccable-Skill |
-| docs/DESIGN.md | Geliefertes Design-System; gepflegt vom impeccable-Skill |
+| PRODUCT.md | Produkt-/Business-Vertrag; im Hauptordner gemäß impeccable-Skill |
+| DESIGN.md | Geliefertes Design-System; im Hauptordner gemäß impeccable-Skill |
 | docs/ARCHITECTURE.md | Software-Architektur (C4 + arc42); gepflegt mit c4-model-skill und arc42-documentation |
 | docs/DEPLOYMENT.md | Deployment-Runbook; aktueller Commit/Build; pflegt der deployende Agent |
 | docs/LEARNINGS.md | Quergedächtnis, append-only; Agenten tragen nach bedeutsamen Sessions Erkenntnisse ein |
@@ -635,6 +635,5 @@ These files are the project's source of truth; keep them current:
 | tasks/<aufgabe>/ | Unterordner für komplexe Aufgaben: Detail-Status, Protokoll, Artefakte |
 
 Konventionen: German knapp, echte Umlaute. LEARNINGS/tasks sind append-only,
-Einträge datieren und Agent-Namen führen, Korrekturen hängen an statt zu
-löschen
+Einträge datieren und Agent-Namen führen, Korrekturen hängen an statt zu löschen
 <!-- /project-doc-guardrails -->
