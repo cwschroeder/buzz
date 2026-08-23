@@ -764,7 +764,7 @@ These files are the project's source of truth; keep them current:
 
 Konventionen: German knapp, echte Umlaute. LEARNINGS/tasks sind append-only,
 Einträge datieren und Agent-Namen führen, Korrekturen hängen an statt zu löschen.
-Nur ein Dokumentordner: ausschließlich  (plural), niemals ein 
-(im Singular) anlegen; ein gefundenes  wird zu  umbenannt und
+Nur ein Dokumentenordner: ausschließlich /docs (Plural), niemals ein /doc
+(im Singular) anlegen; ein gefundenes /doc wird zu /docs umbenannt und
 zusammengeführt.
 <!-- /project-doc-guardrails -->
