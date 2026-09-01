@@ -1,0 +1,645 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PILOT_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PILOT_STATE_ROOT="${BUZZ_PILOT_STATE_DIR:-${HOME}/Library/Application Support/Buzz Pilot}"
+PILOT_LOG_ROOT="${PILOT_STATE_ROOT}/logs"
+PILOT_RELAY_BIND_ADDR="${BUZZ_PILOT_RELAY_BIND_ADDR:-127.0.0.1:3030}"
+PILOT_PUBLIC_RELAY_HOST="${BUZZ_PILOT_PUBLIC_RELAY_HOST:-macstudio-2.taila89eb3.ts.net}"
+PILOT_RELAY_HTTP="${BUZZ_PILOT_RELAY_HTTP:-https://${PILOT_PUBLIC_RELAY_HOST}}"
+PILOT_RELAY_WS="${BUZZ_PILOT_RELAY_WS:-wss://${PILOT_PUBLIC_RELAY_HOST}}"
+PILOT_PAIR_RELAY_BIND_ADDR="${BUZZ_PILOT_PAIR_RELAY_BIND_ADDR:-127.0.0.1:3032}"
+PILOT_PAIR_RELAY_WS="${BUZZ_PILOT_PAIR_RELAY_WS:-${PILOT_RELAY_WS}/pair}"
+PILOT_EDGE_SSH_HOST="${BUZZ_PILOT_EDGE_SSH_HOST:-studio2}"
+PILOT_EDGE_TAILSCALE_BIN="${BUZZ_PILOT_EDGE_TAILSCALE_BIN:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}"
+PILOT_EDGE_BACKEND="${BUZZ_PILOT_EDGE_BACKEND:-http://127.0.0.1:3030}"
+PILOT_EDGE_PAIR_BACKEND="${BUZZ_PILOT_EDGE_PAIR_BACKEND:-http://127.0.0.1:3032}"
+PILOT_EDGE_UPSTREAM="${BUZZ_PILOT_EDGE_UPSTREAM:-http://127.0.0.1:18015}"
+PILOT_INTERNAL_SERVE_PORT="${BUZZ_PILOT_INTERNAL_SERVE_PORT:-3031}"
+PILOT_INTERNAL_PAIR_SERVE_PORT="${BUZZ_PILOT_INTERNAL_PAIR_SERVE_PORT:-3033}"
+PILOT_FUNNEL_PORT="${BUZZ_PILOT_FUNNEL_PORT:-443}"
+# LiteLLM router, moved from mac-mini to mac-studio-home-1 on 2026-08-22.
+# The whole pilot LLM plane hangs off this one line; keep it in sync with
+# ~/litellm/config.yaml and the fleet manifest when the router moves again.
+PILOT_FLEET_BASE_URL="${BUZZ_PILOT_FLEET_BASE_URL:-http://100.97.35.94:4000/v1}"
+PILOT_TMUXREMOTE_BASE_URL="${BUZZ_PILOT_TMUXREMOTE_BASE_URL:-http://127.0.0.1:8100}"
+PILOT_REPO_CONFIG_ROOT="${BUZZ_PILOT_REPO_CONFIG_DIR:-${PILOT_REPO_ROOT}/pilot/repos}"
+PILOT_GROUP_CONFIG_ROOT="${BUZZ_PILOT_GROUP_CONFIG_DIR:-${PILOT_REPO_ROOT}/pilot/groups}"
+PILOT_BUZZ_BIN="${BUZZ_PILOT_BUZZ_BIN:-${PILOT_REPO_ROOT}/../buzz-custom/target/release/buzz}"
+PILOT_AUTH_TAG_BIN="${BUZZ_PILOT_AUTH_TAG_BIN:-${PILOT_REPO_ROOT}/target/release/examples/compute_auth_tag}"
+# Mirrors BUZZ_AGENT_CLI_TIMEOUT_SECONDS of the buzz-comms plugin: a hung CLI
+# must not hang the publish path. Overridable for tests.
+PILOT_CLI_TIMEOUT_SECONDS="${PILOT_CLI_TIMEOUT_SECONDS:-60}"
+
+pilot_require_file() {
+  if [[ ! -f "$1" ]]; then
+    printf 'Missing required pilot file: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+# Jeder Agent hat seit dem 2026-08-24 einen eigenen virtuellen LiteLLM-Key.
+# Vorher teilten sich alle Agenten `buzz-pilot-local`, dadurch war in den
+# Spend-Logs nicht erkennbar, wer welche Last erzeugt. Fehlt die Datei, bleibt
+# es beim Sammel-Key aus fleet.env.
+pilot_load_agent_key() {
+  local agent_id="$1" key_file
+  key_file="${PILOT_STATE_ROOT}/fleet-keys/${agent_id}.env"
+  [[ -f "$key_file" ]] || return 0
+  pilot_load "$key_file"
+}
+
+pilot_load() {
+  pilot_require_file "$1"
+  set -a
+  # shellcheck disable=SC1090
+  source "$1"
+  set +a
+}
+
+# Every agent prompt is the role prompt plus the shared Buzz style rules. The
+# rules used to live as a copy inside each role file and drifted apart: the repo
+# and fleet prompts never gained the "publish only the finished answer" rules
+# buzz-style.md added, so agents narrated their tool calls into the channels.
+# Composing at start time keeps one source of truth, and a changed style file
+# rolls out with the next agent restart instead of needing four edits.
+pilot_compose_system_prompt() {
+  local role_prompt="$1" name="$2" style_file composed_dir composed
+  style_file="${PILOT_REPO_ROOT}/pilot/prompts/buzz-style.md"
+  pilot_require_file "$role_prompt"
+  pilot_require_file "$style_file"
+  composed_dir="${PILOT_STATE_ROOT}/prompts"
+  composed="${composed_dir}/${name}.md"
+  mkdir -p "$composed_dir"
+  {
+    cat "$role_prompt"
+    printf '\n---\n\n'
+    cat "$style_file"
+  } >"$composed"
+  printf '%s\n' "$composed"
+}
+
+pilot_session_exists() {
+  tmux has-session -t "$1" 2>/dev/null
+}
+
+pilot_validate_repo_id() {
+  if [[ ! "$1" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]]; then
+    printf 'Invalid pilot repo ID: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+pilot_repo_config_file() {
+  local repo_id="$1"
+  pilot_validate_repo_id "$repo_id"
+  printf '%s/%s.env\n' "$PILOT_REPO_CONFIG_ROOT" "$repo_id"
+}
+
+pilot_repo_identity_file() {
+  local repo_id="$1"
+  pilot_validate_repo_id "$repo_id"
+  printf '%s/identities/repo-%s.env\n' "$PILOT_STATE_ROOT" "$repo_id"
+}
+
+pilot_repo_channel_file() {
+  local repo_id="$1"
+  pilot_validate_repo_id "$repo_id"
+  printf '%s/channels/repo-%s.env\n' "$PILOT_STATE_ROOT" "$repo_id"
+}
+
+pilot_repo_access_file() {
+  local repo_id="$1"
+  pilot_validate_repo_id "$repo_id"
+  printf '%s/access/repo-%s.allowlist\n' "$PILOT_STATE_ROOT" "$repo_id"
+}
+
+pilot_validate_pubkey() {
+  local pubkey="$1"
+  if [[ ! "$pubkey" =~ ^[[:xdigit:]]{64}$ ]]; then
+    printf 'Invalid Buzz public key: %s\n' "$pubkey" >&2
+    return 1
+  fi
+}
+
+pilot_repo_access_pubkeys() {
+  local repo_id="$1"
+  local access_file raw pubkey
+  local -A seen=()
+
+  access_file="$(pilot_repo_access_file "$repo_id")"
+  [[ -f "$access_file" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    pubkey="${raw//[[:space:]]/}"
+    [[ -n "$pubkey" ]] || continue
+    pilot_validate_pubkey "$pubkey"
+    pubkey="${pubkey,,}"
+    if [[ -z "${seen[$pubkey]:-}" ]]; then
+      seen["$pubkey"]=1
+      printf '%s\n' "$pubkey"
+    fi
+  done <"$access_file"
+}
+
+pilot_group_config_file() {
+  local group_id="$1"
+  pilot_validate_repo_id "$group_id"
+  printf '%s/%s.env\n' "$PILOT_GROUP_CONFIG_ROOT" "$group_id"
+}
+
+pilot_group_channel_file() {
+  local group_id="$1"
+  pilot_validate_repo_id "$group_id"
+  printf '%s/channels/group-%s.env\n' "$PILOT_STATE_ROOT" "$group_id"
+}
+
+pilot_load_repo_config() {
+  local repo_id="$1"
+  local config_file
+
+  config_file="$(pilot_repo_config_file "$repo_id")"
+  pilot_load "$config_file"
+  if [[ "${PILOT_REPO_ID:-}" != "$repo_id" ]]; then
+    printf 'Repo config ID mismatch: expected %s, got %s\n' \
+      "$repo_id" "${PILOT_REPO_ID:-unset}" >&2
+    exit 1
+  fi
+  for variable in \
+    PILOT_REPO_NAME PILOT_REPO_ABOUT PILOT_REPO_WORKSPACE \
+    PILOT_REPO_MCP_COMMAND PILOT_REPO_PROMPT_FILE PILOT_REPO_MODEL \
+    PILOT_REPO_SESSION PILOT_REPO_CHANNEL_NAME PILOT_REPO_CHANNEL_DESCRIPTION; do
+    if [[ -z "${!variable:-}" ]]; then
+      printf 'Missing %s in %s\n' "$variable" "$config_file" >&2
+      exit 1
+    fi
+  done
+}
+
+pilot_load_group_config() {
+  local group_id="$1"
+  local config_file member
+
+  config_file="$(pilot_group_config_file "$group_id")"
+  pilot_load "$config_file"
+  if [[ "${PILOT_GROUP_ID:-}" != "$group_id" ]]; then
+    printf 'Group config ID mismatch: expected %s, got %s\n' \
+      "$group_id" "${PILOT_GROUP_ID:-unset}" >&2
+    exit 1
+  fi
+  for variable in \
+    PILOT_GROUP_NAME PILOT_GROUP_DESCRIPTION PILOT_GROUP_MEMBERS; do
+    if [[ -z "${!variable:-}" ]]; then
+      printf 'Missing %s in %s\n' "$variable" "$config_file" >&2
+      exit 1
+    fi
+  done
+  while IFS= read -r member; do
+    [[ -n "$member" ]] || continue
+    pilot_require_file "$(pilot_repo_config_file "$member")"
+  done < <(pilot_group_members)
+}
+
+pilot_repo_ids() {
+  local config_file
+
+  shopt -s nullglob
+  for config_file in "${PILOT_REPO_CONFIG_ROOT}"/*.env; do
+    basename "$config_file" .env
+  done
+  shopt -u nullglob
+}
+
+pilot_group_ids() {
+  local config_file
+
+  shopt -s nullglob
+  for config_file in "${PILOT_GROUP_CONFIG_ROOT}"/*.env; do
+    basename "$config_file" .env
+  done
+  shopt -u nullglob
+}
+
+pilot_group_members() {
+  local raw member
+  local -A seen=()
+
+  raw="${PILOT_GROUP_MEMBERS:-}"
+  IFS=',' read -r -a members <<<"$raw"
+  for member in "${members[@]}"; do
+    member="${member//[[:space:]]/}"
+    pilot_validate_repo_id "$member"
+    if [[ -n "${seen[$member]:-}" ]]; then
+      printf 'Duplicate group member: %s\n' "$member" >&2
+      exit 1
+    fi
+    seen["$member"]=1
+    printf '%s\n' "$member"
+  done
+}
+
+pilot_group_has_repo() {
+  local group_id="$1"
+  local repo_id="$2"
+  local member
+
+  unset PILOT_GROUP_ID PILOT_GROUP_NAME PILOT_GROUP_DESCRIPTION PILOT_GROUP_MEMBERS
+  pilot_load_group_config "$group_id"
+  while IFS= read -r member; do
+    if [[ "$member" == "$repo_id" ]]; then
+      return 0
+    fi
+  done < <(pilot_group_members)
+  return 1
+}
+
+pilot_repo_group_channels() {
+  local repo_id="$1"
+  local group_id
+
+  while IFS= read -r group_id; do
+    [[ -n "$group_id" ]] || continue
+    if pilot_group_has_repo "$group_id" "$repo_id"; then
+      unset PILOT_GROUP_CHANNEL
+      pilot_load "$(pilot_group_channel_file "$group_id")"
+      printf '%s\n' "${PILOT_GROUP_CHANNEL}"
+    fi
+  done < <(pilot_group_ids)
+}
+
+pilot_channel_for_repo_context() {
+  local repo_id="$1"
+  local group_id="${PILOT_GROUP_ID:-}"
+
+  if [[ -z "$group_id" ]]; then
+    pilot_load "$(pilot_repo_channel_file "$repo_id")"
+    printf '%s\n' "${PILOT_REPO_CHANNEL}"
+    return
+  fi
+  if ! pilot_group_has_repo "$group_id" "$repo_id"; then
+    printf "Repo '%s' is not a member of group '%s'\n" "$repo_id" "$group_id" >&2
+    return 1
+  fi
+  unset PILOT_GROUP_CHANNEL
+  pilot_load "$(pilot_group_channel_file "$group_id")"
+  printf '%s\n' "${PILOT_GROUP_CHANNEL}"
+}
+
+pilot_protocol_lock_key() {
+  local repo_id="$1"
+  local kind="$2"
+  local key="$3"
+
+  # Preserve the accepted ivu-contracts E2E locks from the first pilot.
+  if [[ "$repo_id" == "ivu-contracts" ]]; then
+    printf '%s-%s\n' "$kind" "$key"
+  else
+    printf '%s-%s-%s\n' "$repo_id" "$kind" "$key"
+  fi
+}
+
+pilot_protocol_lock_path() {
+  local key="$1"
+
+  printf '%s/protocol-publishes/%s.lock\n' "$PILOT_STATE_ROOT" "$key"
+}
+
+pilot_publish_lock_exists() {
+  [[ -d "$(pilot_protocol_lock_path "$1")" ]]
+}
+
+pilot_acquire_publish_lock() {
+  local key="$1"
+  local lock_root="${PILOT_STATE_ROOT}/protocol-publishes"
+
+  install -d -m 700 "$lock_root"
+  PILOT_PUBLISH_LOCK="$(pilot_protocol_lock_path "$key")"
+  if ! mkdir "$PILOT_PUBLISH_LOCK" 2>/dev/null; then
+    printf '{"accepted":true,"duplicate":true,"message":"pilot publish already completed"}\n'
+    return 1
+  fi
+}
+
+pilot_release_publish_lock() {
+  rmdir "${PILOT_PUBLISH_LOCK:?publish lock not acquired}"
+}
+
+pilot_turn_state_path() {
+  local repo_id="$1"
+  local root_event_id="$2"
+
+  pilot_validate_repo_id "$repo_id"
+  printf '%s/protocol-turns/%s-%s.turn\n' \
+    "$PILOT_STATE_ROOT" "$repo_id" "$root_event_id"
+}
+
+pilot_claim_turn_mode() {
+  local repo_id="$1"
+  local root_event_id="$2"
+  local mode="$3"
+  local turn_root="${PILOT_STATE_ROOT}/protocol-turns"
+  local existing_mode=""
+
+  install -d -m 700 "$turn_root"
+  PILOT_TURN_STATE="$(pilot_turn_state_path "$repo_id" "$root_event_id")"
+  PILOT_TURN_CLAIM_CREATED=false
+  if mkdir "$PILOT_TURN_STATE" 2>/dev/null; then
+    if ! printf '%s\n' "$mode" >"${PILOT_TURN_STATE}/mode"; then
+      rmdir "$PILOT_TURN_STATE"
+      return 1
+    fi
+    PILOT_TURN_CLAIM_CREATED=true
+    return 0
+  fi
+
+  if [[ -f "${PILOT_TURN_STATE}/mode" ]]; then
+    IFS= read -r existing_mode <"${PILOT_TURN_STATE}/mode"
+  fi
+  if [[ "$existing_mode" == "$mode" ]]; then
+    return 0
+  fi
+
+  printf 'Pilot turn already committed to %s\n' \
+    "${existing_mode:-an incomplete state}" >&2
+  return 1
+}
+
+pilot_release_turn_claim() {
+  if [[ "${PILOT_TURN_CLAIM_CREATED:-false}" == "true" ]]; then
+    rm -f "${PILOT_TURN_STATE:?turn state not acquired}/mode"
+    rmdir "$PILOT_TURN_STATE"
+  fi
+}
+
+pilot_get_turn_mode() {
+  local state_path
+
+  state_path="$(pilot_turn_state_path "$1" "$2")"
+  if [[ -f "${state_path}/mode" ]]; then
+    head -n 1 "${state_path}/mode"
+  fi
+}
+
+# The Buzz CLI turns "@Name" into a p-tag only when Name matches a channel
+# member's display name, and it ignores code regions while extracting. The
+# publish guards mirror exactly that rule: an "@" that cannot wake anybody —
+# a CSS at-rule, a scoped package name, a mail address — must not cost an
+# agent its finished answer, while a real identity is still never triggered.
+
+pilot_strip_code_regions() {
+  awk '
+    /^[[:space:]]*```/ { fenced = !fenced; next }
+    fenced { next }
+    { gsub(/`[^`]*`/, " "); print }
+  '
+}
+
+pilot_strip_german_lint_exemptions() {
+  awk '
+    function exact_close(text, delimiter, delimiter_length, offset, found, before, after) {
+      offset = 0
+      while ((found = index(substr(text, offset + 1), delimiter)) > 0) {
+        found += offset
+        before = found > 1 ? substr(text, found - 1, 1) : ""
+        after = substr(text, found + delimiter_length, 1)
+        if (before != "`" && after != "`") return found
+        offset = found + delimiter_length - 1
+      }
+      return 0
+    }
+    function strip_inline_code(text, opening, delimiter_length, delimiter, tail, closing) {
+      while (match(text, /`+/)) {
+        opening = RSTART
+        delimiter_length = RLENGTH
+        delimiter = substr(text, opening, delimiter_length)
+        tail = substr(text, opening + delimiter_length)
+        closing = exact_close(tail, delimiter, delimiter_length)
+        if (closing == 0) break
+        text = substr(text, 1, opening - 1) " " \
+          substr(tail, closing + delimiter_length)
+      }
+      return text
+    }
+    {
+      candidate = $0
+      indent = 0
+      while (indent < 3 && substr(candidate, 1, 1) == " ") {
+        candidate = substr(candidate, 2)
+        indent++
+      }
+      marker_char = substr(candidate, 1, 1)
+      marker_length = 0
+      if (marker_char == "`" || marker_char == "~") {
+        while (substr(candidate, marker_length + 1, 1) == marker_char) {
+          marker_length++
+        }
+      }
+      if (marker_length >= 3) {
+        if (fence_char == "") {
+          fence_char = marker_char
+          fence_length = marker_length
+        } else if (marker_char == fence_char && marker_length >= fence_length) {
+          fence_char = ""
+          fence_length = 0
+        }
+        next
+      }
+      if (fence_char != "" || $0 ~ /^[[:space:]]*>/) next
+      print strip_inline_code($0)
+    }
+  ' | sed -E 's#([[:alpha:]][[:alnum:]+.-]*://|mailto:)[^[:space:]]+# #g'
+}
+
+pilot_content_has_german_ascii_substitution() {
+  local content="$1"
+  local visible
+
+  visible="$(printf '%s\n' "$content" | pilot_strip_german_lint_exemptions)"
+
+  LC_ALL=C grep -Eiq \
+    '(^|[^[:alnum:]_])([[:alnum:]_]*(aender|pruef|oeffent|fuehr|laeu|loes|wuerd)[[:alnum:]_]*|(da|hier|wo)?fuer|fuenf[[:alnum:]_]*|naechst[[:alnum:]_]*|buendel[[:alnum:]_]*|(dar|gegen|hin|her|vor)?ueber[[:alnum:]_]*|zurueck[[:alnum:]_]*|moeglich[[:alnum:]_]*|frueh[[:alnum:]_]*|spaet[[:alnum:]_]*|waehrend[[:alnum:]_]*|koenn[[:alnum:]_]*|muess[[:alnum:]_]*|duerf[[:alnum:]_]*|zuverlaess[[:alnum:]_]*|groess[[:alnum:]_]*|abschliess[[:alnum:]_]*|plaen[[:alnum:]_]*|faell[[:alnum:]_]*|waehl[[:alnum:]_]*|waer[[:alnum:]_]*|laes[[:alnum:]_]*|klaer[[:alnum:]_]*|haeufig[[:alnum:]_]*|taeg[[:alnum:]_]*|saemt[[:alnum:]_]*|[[:alnum:]_]*itaet[[:alnum:]_]*)([^[:alnum:]_]|$)' \
+    <<<"$visible"
+}
+
+# Portable timeout wrapper. The publish path must never hang on a hung CLI, but
+# macOS ships no GNU coreutils timeout, so this uses a small Perl child: it
+# forks the command, reaps it with WNOHANG and kills it after the deadline.
+# Child stdout/stderr pass through; the wrapper echoes nothing on success and
+# returns the child exit code (124 on timeout). Perl is present on macOS and
+# Linux alike.
+pilot_run_bounded() {
+  perl -e '
+    use POSIX qw(:sys_wait_h);
+    my ($secs, @cmd) = @ARGV;
+    my $pid = fork();
+    exit 127 unless defined $pid;
+    if (!$pid) { exec @cmd; exit 127; }
+    my $deadline = time() + $secs;
+    my $done;
+    while (1) {
+      my $reaped = waitpid($pid, &WNOHANG);
+      if ($reaped == $pid) { $done = 1; last; }
+      if (time() > $deadline) {
+        kill("TERM", $pid);
+        sleep 1;
+        kill("KILL", $pid) if kill(0, $pid);
+        waitpid($pid, 0);
+        print STDERR "buzz did not answer within $secs seconds\n";
+        exit 124;
+      }
+      sleep 1;
+    }
+    my $status = $?;
+    exit($status == 0 ? 0 : $status >> 8);
+  ' "$PILOT_CLI_TIMEOUT_SECONDS" "$@"
+}
+
+# Deterministic secret guard, mirroring the buzz-comms plugin validate_content:
+# common credential shapes have no place in a project update. Deliberately a
+# safety net, not an exhaustive detector.
+pilot_content_has_secret() {
+  local content="$1"
+  grep -Eq "nsec1[02-9ac-hj-np-z]{50,}|\bsk-(proj-)?[A-Za-z0-9_-]{16,}|\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{16,}|\bxox[baprs]-[A-Za-z0-9-]{8,}|\bAKIA[0-9A-Z]{16}\b|\b[Bb]earer[[:space:]]+[A-Za-z0-9._~+/-]{16,}|\b(api[_-]?key|private[_-]?key|access[_-]?token|password|secret|auth[_-]?tag)\b[[:space:]]*[\"']?[[:space:]]*[:=][[:space:]]*[\"']?[A-Za-z0-9+/._-]{16,}" \
+    <<<"$content"
+}
+
+pilot_identity_names() {
+  local file
+
+  # Resolved from local config on purpose: this runs in the publish path,
+  # which must never wait on the relay.
+  for file in "${PILOT_REPO_CONFIG_ROOT}"/*.env; do
+    [[ -f "$file" ]] || continue
+    sed -n 's/^PILOT_REPO_NAME=//p' "$file" | tr -d '"'
+  done
+  # Identities provisioned outside pilot/repos — see pilot/bin/provision.
+  printf '%s\n' 'Christian' 'FirstMate' 'Fleet Agent'
+}
+
+pilot_content_mentions_identity() {
+  local content="$1"
+  local stripped lc_content name lc_name
+
+  case "$content" in
+    *@*) ;;
+    *) return 1 ;;
+  esac
+
+  stripped="$(printf '%s\n' "$content" | pilot_strip_code_regions)"
+  lc_content="$(printf '%s' "$stripped" | tr '[:upper:]' '[:lower:]')"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    lc_name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+    case "$lc_content" in
+      *"@${lc_name}"*) return 0 ;;
+    esac
+  done <<EOF
+$(pilot_identity_names)
+EOF
+  return 1
+}
+
+# --- worker pool contract ---
+# Phase 1 of adaptive repo capacity (schema version 1). All checks fail
+# closed: any invalid input or environment means the pool must not start.
+
+pilot_worker_pool_validate() {
+  local schema="${PILOT_REPO_WORKER_POOL_SCHEMA_VERSION:-}"
+  [[ "$schema" == "1" ]] || return 1
+
+  local min="${WORKERS_MIN:-}" max="${WORKERS_MAX:-}"
+  [[ "$min" =~ ^[0-9]+$ && "$max" =~ ^[0-9]+$ ]] || return 1
+  (( min >= 1 && max >= min )) || return 1
+
+  if [[ -n "${WORKERS_DESIRED:-}" ]]; then
+    local desired="${WORKERS_DESIRED}" until="${WORKERS_DESIRED_UNTIL:-}"
+    [[ "$desired" =~ ^[0-9]+$ ]] || return 1
+    (( desired >= min && desired <= max )) || return 1
+    [[ -n "$until" ]] || return 1
+    # UTC ISO-8601, e.g. 2026-08-31T12:00:00Z. Malformed or past timestamps
+    # invalidate the lease — the pool falls back to WORKERS_MIN via
+    # pilot_worker_pool_effective only for a *valid future* lease; an expired
+    # lease is rejected here so callers notice instead of silently shrinking.
+    local ts
+    ts="$(pilot_worker_pool_parse_utc_epoch "$until")" || return 1
+    local now
+    now="$(date -u +%s)"
+    (( ts > now )) || return 1
+  fi
+
+  return 0
+}
+
+# Parse an ISO-8601 UTC timestamp to epoch seconds. Portable GNU/BSD.
+pilot_worker_pool_parse_utc_epoch() {
+  local value="$1"
+  case "$value" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+    *) return 1 ;;
+  esac
+  if date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$value" +%s >/dev/null 2>&1; then
+    date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$value" +%s   # BSD/macOS
+  else
+    date -u -d "$value" +%s                           # GNU
+  fi
+}
+
+# Effective worker count: a valid, non-expired desired lease wins over min.
+# An expired lease is a normal operational state — the pool falls back to
+# WORKERS_MIN (rc=0). Invalid configuration still fails closed via
+# pilot_worker_pool_validate.
+pilot_worker_pool_effective() {
+  local until="${WORKERS_DESIRED_UNTIL:-}"
+  if [[ -n "${WORKERS_DESIRED:-}" && -n "$until" ]]; then
+    local ts now
+    if ts="$(pilot_worker_pool_parse_utc_epoch "$until" 2>/dev/null)"; then
+      now="$(date -u +%s)"
+      if (( ts <= now )); then
+        printf '%s\n' "${WORKERS_MIN}"
+        return 0
+      fi
+    fi
+  fi
+  pilot_worker_pool_validate || return 1
+  if [[ -n "${WORKERS_DESIRED:-}" ]]; then
+    printf '%s\n' "${WORKERS_DESIRED}"
+  else
+    printf '%s\n' "${WORKERS_MIN}"
+  fi
+}
+
+# Session naming: <repo-session>-wNN.
+pilot_worker_pool_session_name() {
+  local index="$1"
+  local session="${PILOT_REPO_SESSION:-${PILOT_REPO_ID}-agent}"
+  printf '%s-w%02d\n' "$session" "$index"
+}
+
+# Fail closed when the target tmux session already exists.
+pilot_worker_pool_session_exists() {
+  tmux has-session -t "$1" 2>/dev/null
+}
+
+# Deterministic per-repo worktree path: <root>/<repo-id>/wNN. The root
+# override uses the BUZZ_PILOT_* convention; default lives under the state
+# root so the path stays deterministic per state dir.
+pilot_worker_pool_worktree_path() {
+  local index="${1:-1}"
+  local root="${BUZZ_PILOT_WORKTREE_ROOT:-${PILOT_STATE_ROOT}/worktrees}"
+  printf '%s/%s/w%02d\n' "$root" "${PILOT_REPO_ID:?PILOT_REPO_ID not set}" "$index"
+}
+
+# A worktree path is free only if it does not exist or is an empty directory;
+# shared or pre-populated write paths are rejected.
+pilot_worker_pool_worktree_free() {
+  local path="$1"
+  [[ -e "$path" ]] || return 0
+  [[ -d "$path" ]] || return 1
+  setopt null_glob 2>/dev/null || true
+  local count=0 entry
+  for entry in "$path"/* "$path"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    count=$((count+1))
+  done
+  setopt +null_glob 2>/dev/null || true
+  (( count == 0 ))
+}
