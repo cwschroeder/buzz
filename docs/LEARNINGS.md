@@ -128,3 +128,26 @@ anhängen, nie Verlauf löschen.
 - (claude) Die ersten Logzeilen zeigen Precheck-Timeouts auch bei ivu-smp,
   maas-ng und ivu-workflows. Das 10-s-Limit betrifft die ganze Flotte, nicht
   nur codeapp.
+
+## 2026-09-08 — Inferenz-Kapazität der Pilot-Agenten (pi)
+
+- (pi) Die 429-Fehlermeldungen in den Repo-Kanälen (26.08.–08.09., 119 Stück) hatten
+  zwei Drosseln als Ursache: das Deployment-Limit `max_parallel_requests` im
+  LiteLLM-Router (gpu-fast: 1, gpu-quality: 3) und den per-Key-Limit von
+  `max_parallel_requests: 2` auf den virtuellen buzz-*-Keys. Steuern tut das Backend
+  aber mehr: oMLX auf home-1 startet mit `--max-concurrent-requests 8` und
+  verarbeitete im Direktpuls 4×150-Token-Requests in 3,2 s bzw. 8 parallel in 4,4 s
+  Wandzeit; GLM-5.3-Flash läuft als 2-Node-vLLM mit `--max-num-seqs 4`.
+- (pi) Angepasst auf studio-home-1 (Backup `config.yaml.bak-20260908-pre-capacity`):
+  gpu-fast 1→4, gpu-quality 3→4, alle 32 buzz-*-Keys 2→4 (`/key/update`; neues
+  LiteLLM akzeptiert bei `/key/list` nur noch `size<=100`). Verifikation: 4
+  parallele Chat-Requests je Alias laufen komplett mit 200 durch. `pilot/bin/provision-agent-keys`
+  schreibt den neuen Key-Wert jetzt auch für künftige Läufe.
+- (pi) „Einfache Sachen auf Ornith“ bleibt ein offener Punkt: Per-Turn-Modellwahl
+  fehlt in buzz-acp (`OPENAI_COMPAT_MODEL` gilt pro Prozess, der
+  OpenAI-compat-Katalog bewirbt genau ein Modell; `session/set_model` existiert
+  bereits und akzeptiert beliebige Modell-IDs). Gegen die LEARNINGS vom 04.09.
+  (Ornith-XML-Leaks, 57k-Prefill-Guard, Single-Host) wäre ein eigener Alias
+  `gpu-simple` mit Fallback-Kette gpu-fast→gpu-quality plus musterbasiertem
+  Light-Routing in buzz-acp der robuste Weg. Noch nicht umgesetzt, Klärung mit
+  Christian ausstehend.
