@@ -47,3 +47,21 @@ ergänzt.
 - (pi) buzz-pair-relay wurde beim Release-Build nicht neu kompiliert (Inputs
   unverändert seit 31.08., Cargo sagt "fresh") — das ist korrekt, sieht im
   Binary-Timestamp aber nach verpasstem Build aus.
+
+## 2026-09-09 - Backend-Upstream-Abgleich c045321a (pi)
+
+- (pi) Die `buzz-relay --lib`-Media-Tests brauchen eine migrierte
+  Testdatenbank mit buzz-Rolle. Auf dem MacBook lauschten auf Port 55433 ein
+  lokales Docker-Postgres (IPv4) und ein alter SSH-Tunnel (IPv6) gleichzeitig;
+  127.0.0.1 traf das Docker-Postgres und lieferte irreführend
+  `role "buzz" does not exist`. Frischen Tunnel-Port wählen (55434) und
+  TEST_DATABASE_URL, BUZZ_TEST_DATABASE_URL und DATABASE_URL auf denselben
+  Server setzen; danach laufen alle 1045 Lib-Tests grün.
+- (pi) Die Merges 99e3dae83 (07.09.) und ff8c0d36c (09.09., Upstream bis
+  c045321a) lagen lokal vor, waren aber nicht verifiziert, gepusht oder
+  deployt. Der Lauf hat Test, Push zu fork und Deploy nachgeholt;
+  buzz-pair-relay blieb beim Build wie erwartet fresh (Inputs unverändert,
+  gleicher SHA-256 wie 31.08.).
+- (pi) Rollback-Anker dieses Deploys: Branch `backup/pre-upstream-20260909`
+  auf Mac Studio 2 (`8f52a3dcc`), Datenbank-Dump
+  `buzz-before-ff8c0d3-20260909-034951.dump`.
