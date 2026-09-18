@@ -65,3 +65,34 @@ ergänzt.
 - (pi) Rollback-Anker dieses Deploys: Branch `backup/pre-upstream-20260909`
   auf Mac Studio 2 (`8f52a3dcc`), Datenbank-Dump
   `buzz-before-ff8c0d3-20260909-034951.dump`.
+
+## 2026-09-18 - Vorfall: buzz-db-Testsuite gegen Produktion (pi)
+
+- (pi) SCHWERWIEGEND: Die Postgres-Lane `cargo test -p buzz-db -- --ignored`
+  setzt die unter DATABASE_URL benannte Datenbank zurück und legt eigene
+  Testdatenbanken (deg_r_*, deg_w_*, floor_pool_*, one_budget_*, sep_r_*,
+  sep_w_*) auf DEMSELBEN Server an. Sie darf niemals gegen Produktion laufen.
+  Die Learnings vom 05./09.09. („TEST_DATABASE_URL, BUZZ_TEST_DATABASE_URL und
+  DATABASE_URL auf denselben Server“) galten für die Relay-Libtests und wurden
+  von mir falsch auf die buzz-db-Lane übertragen: gleicher Server ja, aber
+  benannte Datenbank muss eine Wegwerf-Kratzdatenbank sein, nie `buzz`.
+- (pi) Vorfallverlauf 18.09.: buzz-db-Lauf über SSH-Tunnel 55435 auf die
+  Produkt-Postgres von Mac Studio 2 → Relay fiel auf „404 no community is
+  configured for this host“ (communities-Tabelle nur noch Testfixtures).
+  Wiederherstellung aus dem unmittelbar vor dem Lauf erzeugten Dump
+  buzz-before-0305a5d-20260918-165636.dump (pg_restore -l geprüft);
+  Verlustfenster 16:56–~17:15 Uhr. Dienste-Neustart, Readiness lokal und
+  öffentlich grün, authentifizierter Kanal-Lesegriff geprüft.
+- (pi) Der Vorfall validiert die Backup-vor-allem-Regel des Runbooks: Der Dump
+  von 16:56 war die Rettung. Ohne ihn wären 9 Tage Daten (bis zum 11.09.)
+  verloren gewesen. Vor JEDEM Lauf gegen die Produkt-Postgres (auch lesend
+  gemeinte) gehört ein frischer Dump dazu.
+- (pi) Der Tailscale-Tunnel zum Studio kann während eines Laufs von direkt
+  (~2 ms) auf Relay (~100 ms RTT) kippen — Symptom: Testsuite wird 15×
+  langsamer. Tests, die viele DB-Roundtrips machen, besser direkt auf dem
+  Studio ausführen oder auf einer lokalen Wegwerf-Postgres.
+- (pi) Forensik-Dump der kaputten Produktions-DB: /tmp/buzz-wrecked-*.dump auf
+  Mac Studio 2. Altlasten: Test-Communities (relay.example, ident-test-*,
+  test-*.example) lagen schon vor dem Vorfall in der Produktions-DB (August/
+  September) und sind mit dem Restore zurückgekehrt; Aufräumen nur mit
+  Christians Freigabe.
