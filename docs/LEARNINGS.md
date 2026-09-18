@@ -96,3 +96,19 @@ ergänzt.
   test-*.example) lagen schon vor dem Vorfall in der Produktions-DB (August/
   September) und sind mit dem Restore zurückgekehrt; Aufräumen nur mit
   Christians Freigabe.
+
+## 2026-09-18 - Deploy 0305a5d54 nach Vorfall (pi)
+
+- (pi) Sichere buzz-db-Lane: lokale Wegwerf-Postgres im Docker
+  (postgres:17-alpine, Port 55440, Superuser buzz, DB buzz_test) — Suite lief
+  in 83 s (vs. 498 s über Tailscale-Tunnel). Die 4 roten store::push-Tests
+  („community write fenced: generation 0") reproduzieren auf purem origin/main
+  mit 7 Ausfällen identisch — merge-unabhängig, wie am 05.09. dokumentiert.
+- (pi) launchd-Bootstrap auf dem Studio kann mit „Input/output error 5"
+  ablehnen, wenn der vorherige bootout noch im Abräumen ist, und SSH-Kommandos
+  können als Zombie hängenbleiben, die weitere launchctl-Aufrufe blockieren.
+  Abhilfe: hängenden Prozess killen, dann erneut bootstrap; nach jedem
+  Dienststart einzeln verifizieren statt im Sammelbefehl.
+- (pi) Docker-Container psql: Dateien liegen auf dem HOST, nicht im Container —
+  SQL-Datei per stdin (docker exec -i ... < datei.sql) füttern, nicht per -f.
+  Komplexes SQL nie inline über SSH quoten, sondern lokal schreiben und pipen.

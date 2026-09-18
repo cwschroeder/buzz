@@ -13,7 +13,7 @@ Diese Liste ist append-only. Statuskorrekturen werden als neue Zeile ergänzt.
 
 ## 2026-09-18 - Upstream-Abgleich 8953cbfff + Vorfall-Wiederherstellung (pi)
 
-Status: **blockiert auf Christians Freigabe** (Vorfall siehe unten)
+Status: **done** (18.09., inkl. Vorfall-Wiederherstellung)
 
 - [x] Merge origin/main (8953cbfff) in customizing/cschroeder — 0305a5d54,
       Konfliktauflösung erhält Customizing f0954339a (transiente Auth-Faults)
@@ -22,11 +22,17 @@ Status: **blockiert auf Christians Freigabe** (Vorfall siehe unten)
 - [x] Migrations-Generalprobe 0045/0046 gegen Kratzdatenbank bestanden
 - [x] Merge auf fork/customizing/cschroeder gepusht
 - [x] Backup vor dem Lauf: buzz-before-0305a5d-20260918-165636.dump (geprüft)
-- [ ] buzz-db-Postgres-Lane sicher wiederholen (NUR gegen Wegwerf-DB!) und
-      Deploy buzz-relay/buzz-pair-relay auf Mac Studio 2 — wartet auf Freigabe
+- [x] buzz-db-Postgres-Lane sicher gegen lokale Wegwerf-Postgres wiederholt
+      (255 grün, 4 rot = merge-unabhängige Upstream-Fehlerklasse, Gegenprobe
+      auf purem origin/main: 7 identische Ausfälle)
+- [x] Deploy buzz-relay + buzz-pair-relay auf Mac Studio 2 (Migrationen 46,
+      Readiness grün, PIDs 61033/61036)
+- [x] Altlast-Test-Communities transaktional entfernt (1 Community übrig)
 
 ### Vorfall 18.09. (pi)
 
 buzz-db-Testsuite lief versehentlich gegen die Produktionsdatenbank → Relay
 fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 ~17:15 Uhr. Details: docs/LEARNINGS.md, docs/DEPLOYMENT.md.
+
+- [x] Buzz-Ergebnis mit Nachweisen publiziert (Thread 18.09.)
