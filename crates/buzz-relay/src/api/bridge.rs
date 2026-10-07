@@ -7954,7 +7954,9 @@ pub(crate) mod postgres_tests {
         config.require_relay_membership = false;
         let mut db = buzz_db::Db::from_pools(writer.clone(), replica.clone());
         db.fence().force_open_for_tests(chrono::Utc::now());
-        db.set_replica_read_max_age_for_tests(Some(std::time::Duration::from_secs(5)));
+        // Keep the synthetic replica fresh through the sequential cancellation
+        // probes. This fixture tests SQL cancellation, not stale-replica fallback.
+        db.set_replica_read_max_age_for_tests(Some(std::time::Duration::from_secs(120)));
         let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("redis pool");
