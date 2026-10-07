@@ -112,3 +112,33 @@ ergänzt.
 - (pi) Docker-Container psql: Dateien liegen auf dem HOST, nicht im Container —
   SQL-Datei per stdin (docker exec -i ... < datei.sql) füttern, nicht per -f.
   Komplexes SQL nie inline über SSH quoten, sondern lokal schreiben und pipen.
+
+
+## 2026-10-07: Backend-Upstream und isolierte Prüfung
+
+- Migration 0049 legt einen Thread-Index an. Auf einer bestehenden Datenbank
+  vorher `CREATE INDEX CONCURRENTLY` ausführen und Definition sowie
+  `indisvalid`, `indisready` und `indislive` prüfen. Die Migration erkennt den
+  vorhandenen Index und vermeidet den blockierenden Aufbau beim Start.
+- PostgreSQL-Tests und Migrationsprobe liefen in einer eigenen lokalen Instanz
+  mit getrenntem Redis. Auch eine Produktionskopie gehört nur dorthin und wird
+  nach Abschluss gelöscht. Die kanonische PostgreSQL-Testspur erzeugt isolierte
+  Datenbanken aus dem gewünschten Schema samt Reconcile-Schritt.
+- Vorübergehende Infrastrukturfehler auch bei der neuen abschließenden
+  Auth-Zugangskontrolle mit NOTICE und Verbindungsende beantworten. Ein finales
+  AUTH-OK mit false verhindert die bestehende Desktop-Wiederverbindung.
+- Mesh-Echo muss seinen begonnenen Empfang über Drain-Prüftakte behalten.
+  Ein neuer Empfang pro Takt verwirft bereits gelesene Frames oder die laufende
+  Redis-Prüfung. Der echte Roundtrip scheiterte zweimal mit 504 und besteht mit
+  dem erhaltenen Future.
+- Eine fünf Sekunden frische künstliche Replica veraltet während sequenzieller
+  Timeout-Tests. Das Routing wechselt dann berechtigt zum Writer. Die Fixture
+  verwendet 120 Sekunden; die Produktionsregel bleibt unverändert.
+- Kurze Shell-Sleeps wurden auf diesem Mac zusammengelegt: zehn Sleeps von
+  50 ms dauerten etwa 2,6 Sekunden. Idle-Testfixtures berücksichtigen das mit
+  500 ms und einer weiterhin falsifizierbaren Untergrenze von 800 ms. Nach
+  jedem Lauf den Testprozess explizit beenden; Produktionstimer bleiben gleich.
+- Release-Builds brauchen `BUZZ_SOURCE_SHA`, `BUZZ_BUILD_ID` und
+  `BUZZ_BUILD_URL`. Ohne diese meldet der Laufzeitstatus unknown. Nach dem
+  Deployment den eingebauten Commit prüfen, zusätzlich zu Binary-Hash und
+  Checkout-Stand.

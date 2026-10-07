@@ -44,4 +44,24 @@ Validierung vor Deployment:
   Roundtrip scheiterte zuvor zweimal mit 504 und besteht nach der Korrektur.
 - Release-Build aus dem geprüften Git-Arbeitsbaum auf Studio 2 erfolgreich.
 
-Deployment und externe Prüfung sind noch offen.
+Deployment abgeschlossen am 07.10.2026 auf Mac Studio 2. Laufzeit-Code:
+`9e8bd7d5b60a9ce10393df280859a676f1dbbb8e`, Build-ID
+`backend-20261007-studio2`. Nur Relay und Pair-Relay wurden ersetzt und neu
+gestartet. Desktop, Mobile, Agent-Binaries und Web-Assets wurden nicht ausgerollt.
+
+Live geprüft:
+
+- Interner Status meldet den eingebauten Quellcommit, PostgreSQL und Redis
+  erreichbar sowie einen sicheren Partitionenkatalog.
+- Migrationen 1 bis 56 erfolgreich; zuletzt 29.619 Events vorhanden.
+- Öffentliche Readiness meldet ready; NIP-11 liefert Version 0.2.1.
+- Authentifizierter Projektkanal gelesen; öffentlicher Pair-WebSocket beantwortet
+  eine echte Subscription mit EOSE.
+- Kein ERROR oder Panic im geprüften Logabschnitt nach dem letzten Neustart.
+- Browserprüfung war wegen eines Fehlers der Fenstererkennung nicht möglich;
+  externe Nachweise stammen aus HTTP und dem tatsächlichen Nostr/WebSocket-Protokoll.
+- Lokale Testinstanzen gestoppt, Testcluster samt Produktionskopie entfernt.
+  Die geschützten Backups auf Studio 2 bleiben erhalten.
+
+Binärhashes, Backup-Anker und Rollback-Hinweise stehen in
+[DEPLOYMENT.md](../../docs/DEPLOYMENT.md).

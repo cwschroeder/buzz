@@ -42,4 +42,4 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 
 | Status | Aufgabe | Details |
 |---|---|---|
-| in progress | Upstream bd1ff00e4 integrieren und Relay sowie Pair-Relay auf Mac Studio 2 aktualisieren | [Prüfung und Nachweise](backend-upstream-20261007/README.md) |
+| erledigt | Upstream bd1ff00e4 integrieren und Relay sowie Pair-Relay auf Mac Studio 2 aktualisieren | [Prüfung und Nachweise](backend-upstream-20261007/README.md) |
