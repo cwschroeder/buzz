@@ -36,3 +36,10 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 ~17:15 Uhr. Details: docs/LEARNINGS.md, docs/DEPLOYMENT.md.
 
 - [x] Buzz-Ergebnis mit Nachweisen publiziert (Thread 18.09.)
+
+
+## 2026-10-07 - Backend-Upstream (Codex)
+
+| Status | Aufgabe | Details |
+|---|---|---|
+| in progress | Upstream bd1ff00e4 integrieren und Relay sowie Pair-Relay auf Mac Studio 2 aktualisieren | [Prüfung und Nachweise](backend-upstream-20261007/README.md) |
