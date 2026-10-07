@@ -264,7 +264,7 @@ fn deny_nip_fi_auth(conn: &ConnectionState, class: buzz_auth::DenialClass) {
 
 /// Refuse a root AUTH that passed the early gates but failed admission: record
 /// the outcome, send the denial (the canonical NOTICE under NIP-FI, else an
-/// OK false on the control channel so it drains before the Close), and close.
+/// NOTICE for dependency failures or OK false for a real denial), and close.
 fn deny_admission(conn: &ConnectionState, event_id_hex: &str, denial: AdmissionDenial) {
     metrics::counter!("buzz_auth_failures_total", "reason" => denial.metric).increment(1);
     if !conn.reject_auth(denial.outcome) {
@@ -272,6 +272,10 @@ fn deny_admission(conn: &ConnectionState, event_id_hex: &str, denial: AdmissionD
     }
     if conn.nip_fi_assertion.is_some() {
         deny_nip_fi_auth(conn, denial.class);
+        return;
+    }
+    if denial.class == buzz_auth::DenialClass::AuthorizationUnavailable {
+        close_for_transient_fault(conn, denial.reason);
         return;
     }
     let _ = conn.ctrl_tx.try_send(WsMessage::Text(
@@ -305,7 +309,7 @@ pub fn extract_auth_tag_json(event: &nostr::Event) -> Option<String> {
 /// never be delivered as one. A NOTICE followed by an immediate close is
 /// treated as an ordinary connection failure instead, so the client's
 /// backoff reconnect loop keeps running and recovers once the fault clears.
-async fn close_for_transient_fault(conn: &ConnectionState, notice: &str) {
+fn close_for_transient_fault(conn: &ConnectionState, notice: &str) {
     // Callers transition Pending -> Failed via `reject_auth` first (atomic,
     // metric-bound); here we only deliver the NOTICE and close.
     // Route via the control channel so the send loop drains the NOTICE ahead
@@ -431,6 +435,15 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     if !conn.reject_auth(auth_outcome) {
                         return;
                     }
+                    if conn.nip_fi_assertion.is_some() {
+                        let class = if outcome == BanOutcome::DbError {
+                            buzz_auth::DenialClass::AuthorizationUnavailable
+                        } else {
+                            buzz_auth::DenialClass::AuthorizationDenied
+                        };
+                        deny_nip_fi_auth(&conn, class);
+                        return;
+                    }
                     if matches!(outcome, BanOutcome::DbError) {
                         // Customizing: a transient DB fault is not an identity
                         // rejection — official desktop clients latch any AUTH
@@ -439,7 +452,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         // recover once the fault clears.
                         warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
                               "ban-state lookup unavailable — closing without AUTH rejection");
-                        close_for_transient_fault(&conn, deny_reason).await;
+                        close_for_transient_fault(&conn, deny_reason);
                         return;
                     }
                     // Decision 4: banned ⇒ OK false + immediate WebSocket close.
@@ -448,17 +461,6 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     // the send loop drains it ahead of the Close it emits on
                     // cancel. Then cancel to close the socket immediately.
                     //
-                    // With an FI assertion, NIP-FI requires the canonical
-                    // NOTICE instead: a ban is `authorization denied`, a failed
-                    // lookup is `authorization unavailable`.
-                    if conn.nip_fi_assertion.is_some() {
-                        let class = match outcome {
-                            BanOutcome::DbError => buzz_auth::DenialClass::AuthorizationUnavailable,
-                            _ => buzz_auth::DenialClass::AuthorizationDenied,
-                        };
-                        deny_nip_fi_auth(&conn, class);
-                        return;
-                    }
                     let _ = conn.ctrl_tx.try_send(WsMessage::Text(
                         RelayMessage::ok(&event_id_hex, false, deny_reason).into(),
                     ));
@@ -525,8 +527,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         close_for_transient_fault(
                             &conn,
                             "error: internal error checking allowlist",
-                        )
-                        .await;
+                        );
                         return;
                     }
                 }
@@ -585,8 +586,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     close_for_transient_fault(
                         &conn,
                         "error: internal error checking relay membership",
-                    )
-                    .await;
+                    );
                     return;
                 }
             };
@@ -1276,6 +1276,18 @@ mod tests {
             );
         }
 
+        fn assert_off_mode_transient(mut self, reason: &str) {
+            assert_eq!(
+                self.ctrl_rx.try_recv().expect("transient NOTICE"),
+                WsMessage::Text(crate::protocol::RelayMessage::notice(reason).into()),
+            );
+            assert!(self.ctrl_rx.try_recv().is_err(), "one notice only");
+            assert!(self.send_rx.try_recv().is_err(), "no AUTH rejection");
+            assert!(self.terminal_rx.try_recv().is_err(), "no FI frame");
+            assert!(self.conn.cancel.is_cancelled());
+            assert!(matches!(self.conn.auth_state_snapshot(), AuthState::Failed));
+        }
+
         fn assert_off_mode_ok(mut self, reason: &str) {
             let frame = match self
                 .send_rx
@@ -1377,7 +1389,7 @@ mod tests {
     }
 
     /// Ban-lookup failure under FI is `authorization unavailable`, not denied.
-    /// (Off mode keeps the ctrl-channel OK + close, covered by
+    /// (Off mode sends a retryable NOTICE + close, covered by
     /// `handler_accounts_ban_check_database_error`.)
     #[tokio::test]
     async fn fi_ban_check_error_emits_terminal_authorization_unavailable() {
@@ -1385,6 +1397,48 @@ mod tests {
         let harness = AuthHarness::new(true);
         harness.run(harness.auth_event(), state).await;
         harness.assert_fi_terminal(buzz_auth::DenialClass::AuthorizationUnavailable);
+    }
+
+    #[tokio::test]
+    async fn ban_lookup_fault_keeps_off_mode_reconnect_retryable() {
+        let state = auth_test_state().await;
+        let harness = AuthHarness::new(false);
+        harness.run(harness.auth_event(), state).await;
+        harness.assert_off_mode_transient("error: internal error checking restriction state");
+    }
+
+    #[tokio::test]
+    async fn final_admission_fault_keeps_off_mode_reconnect_retryable() {
+        for (metric, reason, outcome) in [
+            (
+                "ban_check_error",
+                "error: internal error checking restriction state",
+                AuthOutcome::BanCheckError,
+            ),
+            (
+                "relay_membership_check_error",
+                "error: internal error checking relay membership",
+                AuthOutcome::RelayMembershipCheckError,
+            ),
+            (
+                "agent_owner_link_error",
+                super::OWNER_LINK_ERROR,
+                AuthOutcome::RelayMembershipCheckError,
+            ),
+        ] {
+            let harness = AuthHarness::new(false);
+            super::deny_admission(
+                &harness.conn,
+                "event-id",
+                super::AdmissionDenial {
+                    metric,
+                    reason,
+                    outcome,
+                    class: buzz_auth::DenialClass::AuthorizationUnavailable,
+                },
+            );
+            harness.assert_off_mode_transient(reason);
+        }
     }
 
     /// Root wire frames for an FI session whose NIP-42 key is not the
@@ -3343,7 +3397,7 @@ mod tests {
                 if with_fi {
                     harness.assert_fi_terminal(buzz_auth::DenialClass::AuthorizationUnavailable);
                 } else {
-                    harness.assert_off_mode_ok("error: internal error checking allowlist");
+                    harness.assert_off_mode_transient("error: internal error checking allowlist");
                 }
             }
             drop_schema(&admin, &schema).await;
@@ -3360,7 +3414,9 @@ mod tests {
                 if with_fi {
                     harness.assert_fi_terminal(buzz_auth::DenialClass::AuthorizationUnavailable);
                 } else {
-                    harness.assert_off_mode_ok("error: internal error checking relay membership");
+                    harness.assert_off_mode_transient(
+                        "error: internal error checking relay membership",
+                    );
                 }
             }
             drop_schema(&admin, &schema).await;
