@@ -26,4 +26,22 @@ Christian hat Integration und Backend-Deployment am 07.10.2026 freigegeben.
 Compiler-Prüfung und Release-Build für die beiden Relay-Binaries bestanden.
 Die Migrationsprobe hat Stand 46 auf 56 angehoben; alle 29.567 Events sind
 erhalten. Alle Migrationen melden Erfolg, der vorbereitete Index ist weiterhin
-gültig, bereit und aktiv. Backend-Tests, Clippy und Deployment sind noch offen.
+gültig, bereit und aktiv.
+
+Validierung vor Deployment:
+
+- 1.888 Server-Unit-Tests im abschließenden Lauf bestanden.
+- PostgreSQL-Spur: 857 von 859 im parallelen Lauf bestanden. Die Read-State-
+  Lastprobe besteht einzeln; der zweite Fehler war eine nach fünf Sekunden
+  veraltete künstliche Replica im Cancellation-Test. Drei betroffene Prüfungen
+  bestanden nach der Fixture-Korrektur einzeln gegen isolierte Datenbanken.
+- Agent/CLI-Spur: 2.778 von 2.781 zunächst bestanden. Die drei Nachprüfungen
+  sind grün. Zwei Idle-Tests berücksichtigen nun die auf diesem Mac gemessene
+  Verzögerung von Shell-Sleeps, mit einer weiterhin falsifizierbaren Untergrenze.
+- Clippy mit allen Backend-Testtargets und Formatprüfung bestanden.
+- Mesh-Echo verlor beim Drain-Prüftakt den bereits begonnenen Empfang.
+  Der Empfang bleibt nun über Prüftakte hinweg erhalten. Der echte Mesh-
+  Roundtrip scheiterte zuvor zweimal mit 504 und besteht nach der Korrektur.
+- Release-Build aus dem geprüften Git-Arbeitsbaum auf Studio 2 erfolgreich.
+
+Deployment und externe Prüfung sind noch offen.

@@ -3455,6 +3455,8 @@ mod tests {
     async fn idle_resets_on_stdout_activity() {
         // Send valid JSON (session/update notifications) to reset the idle timer.
         // Non-JSON lines no longer reset idle — only valid JSON notifications do.
+        // macOS can coalesce the shell's 50ms sleeps to about 250ms. Leave
+        // headroom without letting a missing reset satisfy the elapsed bound.
         let mut client = spawn_script(
             r#"for i in $(seq 1 10); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"thinking"}}}}'; sleep 0.05; done; sleep 10"#,
         )
@@ -3466,15 +3468,17 @@ mod tests {
             .read_until_response_with_idle_timeout(
                 "test",
                 999,
-                std::time::Duration::from_millis(200),
+                std::time::Duration::from_millis(500),
                 hard_deadline,
                 max_dur,
             )
             .await;
         let elapsed = start.elapsed();
-        // 10 messages × 50ms = ~500ms of activity, then idle timeout fires after 200ms more
-        assert!(elapsed >= std::time::Duration::from_millis(400));
-        assert!(elapsed < std::time::Duration::from_secs(3));
+        client.shutdown().await;
+        // Activity lasts at least 500ms, followed by the 500ms idle guard.
+        // Without resets the call ends at 500ms and fails this lower bound.
+        assert!(elapsed >= std::time::Duration::from_millis(800));
+        assert!(elapsed < std::time::Duration::from_secs(5));
         assert!(matches!(result, Err(AcpError::IdleTimeout(_))));
     }
 
@@ -3650,8 +3654,8 @@ mod tests {
 
     #[tokio::test]
     async fn keepalive_resets_idle_past_deadline() {
-        // Keepalive session/update lines every 50ms against a 100ms idle deadline.
-        // The turn should survive well past the 100ms deadline (proves the fix).
+        // Keepalive lines request 50ms spacing; macOS may coalesce each shell
+        // sleep to about 250ms. A 500ms guard accommodates that producer.
         let mut client = spawn_script(
             r#"for i in $(seq 1 20); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"keepalive"}}}'; sleep 0.05; done; sleep 10"#,
         )
@@ -3663,19 +3667,20 @@ mod tests {
             .read_until_response_with_idle_timeout(
                 "test",
                 999,
-                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(500),
                 hard_deadline,
                 max_dur,
             )
             .await;
         let elapsed = start.elapsed();
-        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after 100ms more.
-        // Must survive well past the 100ms deadline.
+        client.shutdown().await;
+        // Even with nominal spacing, activity must exceed the 500ms guard.
+        // Removing the reset still fails the 800ms lower bound.
         assert!(
-            elapsed >= std::time::Duration::from_millis(500),
+            elapsed >= std::time::Duration::from_millis(800),
             "keepalive should reset idle past the deadline; elapsed only {elapsed:?}"
         );
-        assert!(elapsed < std::time::Duration::from_secs(5));
+        assert!(elapsed < std::time::Duration::from_secs(8));
         assert!(matches!(result, Err(AcpError::IdleTimeout(_))));
     }
 
