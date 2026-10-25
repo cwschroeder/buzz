@@ -43,3 +43,9 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 | Status | Aufgabe | Details |
 |---|---|---|
 | erledigt | Upstream bd1ff00e4 integrieren und Relay sowie Pair-Relay auf Mac Studio 2 aktualisieren | [Prüfung und Nachweise](backend-upstream-20261007/README.md) |
+
+## 2026-10-25 - Upstream-Abgleich
+
+- Quellintegration von `origin/main` (`9e8c9fc04`) mit erhaltenen Anpassungen.
+  [Konfliktauflösung und Prüfergebnisse](upstream-20261025/README.md).
+- Nicht live; Büro-Netzausfall, vollständiger Build und Rollout bleiben offen.
