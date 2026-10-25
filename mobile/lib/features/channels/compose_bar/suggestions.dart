@@ -76,7 +76,7 @@ class _MentionSuggestions extends StatelessWidget {
               leading: AvatarImage(
                 imageUrl: avatarUrl,
                 radius: 18,
-                backgroundColor: context.colors.primaryContainer,
+                backgroundColor: context.controlSurface,
                 fallback: Text(
                   // Name-derived for named candidates; keyed to the hex
                   // public key for unnamed ones so the compact-npub label
@@ -146,11 +146,7 @@ abstract final class _MentionSuggestionInfo {
     return Row(
       children: [
         if (candidate.isAgent) ...[
-          Icon(
-            LucideIcons.bot,
-            size: 12,
-            color: context.colors.onSurfaceVariant,
-          ),
+          Icon(BuzzIcons.bot, size: 12, color: context.colors.onSurfaceVariant),
           const SizedBox(width: Grid.half),
           Text('agent', style: style),
         ] else if (isAdmin)
@@ -231,7 +227,7 @@ class _ChannelSuggestions extends StatelessWidget {
               leading: SizedBox.square(
                 dimension: 36,
                 child: Icon(
-                  LucideIcons.hash,
+                  BuzzIcons.hash,
                   size: 20,
                   color: context.colors.onSurfaceVariant,
                 ),

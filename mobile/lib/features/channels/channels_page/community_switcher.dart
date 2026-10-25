@@ -34,13 +34,13 @@ final _communityContentReadyProvider = Provider.autoDispose<AsyncValue<bool>>((
   );
 });
 
-/// Reuses Settings' entrance/dismissal, while letting a selected avatar leave
+/// Uses a scale-and-fade entrance/dismissal, while letting a selected avatar leave
 /// independently of the surface. The flight already performs the exit fade.
-class _CommunitySwitcherRoute extends _SettingsPageRoute {
+class _CommunitySwitcherRoute extends _CommunitySurfaceRoute {
   _CommunitySwitcherRoute({
     required super.builder,
     required super.onTransitionProgress,
-  });
+  }) : super(opaque: false);
 
   bool flying = false;
 
@@ -62,8 +62,10 @@ class _CommunityFlight {
   final String? previousCommunityId;
 }
 
-class _CommunitySwitcherPage extends HookConsumerWidget {
-  const _CommunitySwitcherPage({
+/// Shared community management surface for app entry and switching.
+class CommunitySwitcherPage extends HookConsumerWidget {
+  const CommunitySwitcherPage({
+    super.key,
     required this.destination,
     this.arrivingCommunity,
     required this.prepareLanding,
@@ -247,7 +249,7 @@ class _CommunitySwitcherPage extends HookConsumerWidget {
       unawaited(
         navigator.push(
           MaterialPageRoute<void>(
-            builder: (_) => const PairingPage(addingCommunity: true),
+            builder: (_) => const OnboardingAppEntry(addingCommunity: true),
           ),
         ),
       );
@@ -279,7 +281,7 @@ class _CommunitySwitcherPage extends HookConsumerWidget {
                 IconButton(
                   tooltip: 'Close community switcher',
                   onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(LucideIcons.x),
+                  icon: const Icon(BuzzIcons.x),
                 ),
                 const Spacer(),
                 TextButton(
@@ -674,9 +676,9 @@ class _CommunityGridAdd extends StatelessWidget {
             child: Container(
               width: _communityGridAvatarSize,
               height: _communityGridAvatarSize,
-              color: context.colors.primaryContainer.withValues(alpha: 0.5),
+              color: context.controlSurface.withValues(alpha: 0.5),
               child: Icon(
-                LucideIcons.plus,
+                BuzzIcons.plus,
                 size: 32,
                 color: context.colors.onSurfaceVariant,
               ),

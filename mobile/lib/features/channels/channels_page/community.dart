@@ -43,16 +43,16 @@ class _CommunityMenuSheet extends StatelessWidget {
                 children: [
                   if (canInvite && invitePageBuilder != null)
                     AppListRow(
-                      icon: LucideIcons.userPlus,
+                      icon: BuzzIcons.userPlus,
                       title: 'Invite',
-                      trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                      trailing: const Icon(BuzzIcons.chevronRight, size: 18),
                       onTap: () => openPage(invitePageBuilder!),
                     ),
                   if (appearancePageBuilder != null)
                     AppListRow(
-                      icon: LucideIcons.sunMoon,
+                      icon: BuzzIcons.sunMoon,
                       title: 'Appearance',
-                      trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                      trailing: const Icon(BuzzIcons.chevronRight, size: 18),
                       onTap: () => openPage(appearancePageBuilder!),
                     ),
                 ],
@@ -61,9 +61,9 @@ class _CommunityMenuSheet extends StatelessWidget {
               children: [
                 AppListRow(
                   key: const Key('community-menu-switch'),
-                  icon: LucideIcons.arrowLeftRight,
+                  icon: BuzzIcons.arrowLeftRight,
                   title: 'Switch Community',
-                  trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                  trailing: const Icon(BuzzIcons.chevronRight, size: 18),
                   onTap: openSwitcher,
                 ),
               ],
@@ -131,40 +131,21 @@ class _CommunityIndicator extends ConsumerWidget {
         label: 'Community settings',
         child: Opacity(
           opacity: hidden ? 0 : 1,
-          child: CommunityAvatar(
-            key: avatarKey,
-            name: activeCommunity?.name,
-            relayUrl: activeCommunity?.relayUrl,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CommunityHeaderTitle extends ConsumerWidget {
-  final TextStyle? style;
-  final VoidCallback onTap;
-
-  const _CommunityHeaderTitle({required this.onTap, this.style});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final name = ref.watch(activeCommunityProvider).value?.name;
-    final title = name?.trim();
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: SizedBox.expand(
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Padding(
-            padding: const EdgeInsets.only(left: Grid.xxs),
-            child: Text(
-              title == null || title.isEmpty ? 'Community' : title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(Radii.full),
+            child: ColoredBox(
+              color: context.controlSurface,
+              child: SizedBox.square(
+                dimension: Grid.xl,
+                child: Center(
+                  child: CommunityAvatar(
+                    key: avatarKey,
+                    size: _kTopSectionProfileAvatarSize,
+                    name: activeCommunity?.name,
+                    relayUrl: activeCommunity?.relayUrl,
+                  ),
+                ),
+              ),
             ),
           ),
         ),

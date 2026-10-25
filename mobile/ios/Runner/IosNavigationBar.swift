@@ -23,15 +23,12 @@ final class IosNavigationBarFactory: NSObject, FlutterPlatformViewFactory {
 }
 
 final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate {
-  var maximumWidth: CGFloat = 240 {
-    didSet { if maximumWidth != oldValue { invalidateIntrinsicContentSize() } }
-  }
   var onActivate: (() -> Void)?
   private let titleLabel = UILabel()
   private let subtitleLabel = UILabel()
-  private var avatarView: UIImageView?
-  private var presenceView: UIView?
-  private var subtitlePresenceView: UIView?
+  private let contentStack = UIStackView()
+  private let textStack = UIStackView()
+  private let subtitleStack = UIStackView()
 
   init(title: String?, subtitle: String, color: UIColor) {
     if #available(iOS 26.0, *) {
@@ -42,17 +39,36 @@ final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate
     clipsToBounds = true
     layer.cornerCurve = .continuous
     titleLabel.text = title
-    titleLabel.font = .preferredFont(forTextStyle: .headline)
     titleLabel.textColor = color
     subtitleLabel.text = subtitle
-    subtitleLabel.font = .preferredFont(forTextStyle: .caption1)
     subtitleLabel.textColor = .secondaryLabel
     for label in [titleLabel, subtitleLabel] {
       label.textAlignment = .center
       label.lineBreakMode = .byTruncatingTail
       label.adjustsFontForContentSizeCategory = false
-      contentView.addSubview(label)
+      label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
+    subtitleStack.axis = .horizontal
+    subtitleStack.alignment = .center
+    subtitleStack.spacing = 6
+    subtitleStack.addArrangedSubview(subtitleLabel)
+    textStack.axis = .vertical
+    textStack.alignment = .center
+    textStack.addArrangedSubview(titleLabel)
+    textStack.addArrangedSubview(subtitleStack)
+    contentStack.axis = .horizontal
+    contentStack.alignment = .center
+    contentStack.spacing = 8
+    contentStack.addArrangedSubview(textStack)
+    contentStack.translatesAutoresizingMaskIntoConstraints = false
+    contentView.addSubview(contentStack)
+    NSLayoutConstraint.activate([
+      contentStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
+      contentStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
+      contentStack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+    ])
+    translatesAutoresizingMaskIntoConstraints = false
+    updateFonts()
     // Flutter creates platform views with a zero frame. Keep a nonzero
     // intrinsic width and let UINavigationBar compress it between its items.
     setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -64,11 +80,23 @@ final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate
   }
 
   func setAvatar(_ image: UIImage?, presence: UIColor?) {
-    let avatar = UIImageView(image: image)
+    // Bar-item images carry alignment insets; the title owns its 32pt layout.
+    let avatar = UIImageView(image: image?.withAlignmentRectInsets(.zero))
     avatar.accessibilityIdentifier = "dm-navigation-avatar"
     avatar.contentMode = .scaleAspectFit
-    contentView.addSubview(avatar)
-    avatarView = avatar
+    let avatarContainer = UIView()
+    avatar.translatesAutoresizingMaskIntoConstraints = false
+    avatarContainer.addSubview(avatar)
+    contentStack.insertArrangedSubview(avatarContainer, at: 0)
+    NSLayoutConstraint.activate([
+      avatarContainer.widthAnchor.constraint(equalToConstant: 32),
+      avatarContainer.heightAnchor.constraint(equalToConstant: 32),
+      avatar.leadingAnchor.constraint(equalTo: avatarContainer.leadingAnchor),
+      avatar.trailingAnchor.constraint(equalTo: avatarContainer.trailingAnchor),
+      avatar.topAnchor.constraint(equalTo: avatarContainer.topAnchor),
+      avatar.bottomAnchor.constraint(equalTo: avatarContainer.bottomAnchor),
+    ])
+    textStack.alignment = .leading
     for label in [titleLabel, subtitleLabel] { label.textAlignment = .natural }
     if let presence {
       let badge = UIView()
@@ -77,9 +105,16 @@ final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate
       badge.layer.borderWidth = 1.5
       badge.layer.borderColor = UIColor.systemBackground.cgColor
       badge.accessibilityIdentifier = "dm-navigation-presence"
-      contentView.addSubview(badge)
-      presenceView = badge
+      badge.translatesAutoresizingMaskIntoConstraints = false
+      avatarContainer.addSubview(badge)
+      NSLayoutConstraint.activate([
+        badge.widthAnchor.constraint(equalToConstant: 8),
+        badge.heightAnchor.constraint(equalToConstant: 8),
+        badge.trailingAnchor.constraint(equalTo: avatarContainer.trailingAnchor),
+        badge.bottomAnchor.constraint(equalTo: avatarContainer.bottomAnchor),
+      ])
     }
+    invalidateIntrinsicContentSize()
   }
 
   func setSubtitlePresence(_ color: UIColor) {
@@ -88,8 +123,11 @@ final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate
     dot.layer.cornerRadius = 3
     dot.isAccessibilityElement = false
     dot.accessibilityIdentifier = "dm-navigation-status-dot"
-    contentView.addSubview(dot)
-    subtitlePresenceView = dot
+    subtitleStack.insertArrangedSubview(dot, at: 0)
+    NSLayoutConstraint.activate([
+      dot.widthAnchor.constraint(equalToConstant: 6),
+      dot.heightAnchor.constraint(equalToConstant: 6),
+    ])
     invalidateIntrinsicContentSize()
   }
 
@@ -125,13 +163,25 @@ final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate
   }
 
   override var intrinsicContentSize: CGSize {
-    CGSize(width: min(maximumWidth, max(titleLabel.intrinsicContentSize.width, subtitleLabel.intrinsicContentSize.width + (subtitlePresenceView == nil ? 0 : 12)) + 24 + (avatarView == nil ? 0 : 40)),
-           height: max(44, titleLabel.intrinsicContentSize.height + subtitleLabel.intrinsicContentSize.height))
+    let contentSize = contentStack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+    return CGSize(width: contentSize.width + 24, height: max(44, contentSize.height))
   }
 
-  override func layoutSubviews() {
-    super.layoutSubviews()
-    layer.cornerRadius = bounds.height / 2
+  override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+    super.traitCollectionDidChange(previousTraitCollection)
+    if previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory {
+      updateFonts()
+      invalidateIntrinsicContentSize()
+      setNeedsLayout()
+    }
+  }
+
+  override func sizeThatFits(_ size: CGSize) -> CGSize {
+    let desired = intrinsicContentSize
+    return CGSize(width: min(size.width, desired.width), height: desired.height)
+  }
+
+  private func updateFonts() {
     // Compact navigation remains a 44pt toolbar. Scale within that budget;
     // the complete title/subtitle remains available as one VoiceOver label.
     titleLabel.font = UIFontMetrics(forTextStyle: .headline).scaledFont(
@@ -140,31 +190,20 @@ final class NavigationTitleView: UIVisualEffectView, UIGestureRecognizerDelegate
     subtitleLabel.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
       for: .systemFont(ofSize: 12), maximumPointSize: 14,
       compatibleWith: traitCollection)
-    let titleHeight = titleLabel.intrinsicContentSize.height
-    let subtitleHeight = subtitleLabel.intrinsicContentSize.height
-    let top = (bounds.height - titleHeight - subtitleHeight) / 2
-    let hasAvatar = avatarView != nil
-    let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
-    let textX: CGFloat = hasAvatar && !rtl ? 52 : 12
-    let textWidth = max(0, bounds.width - 24 - (hasAvatar ? 40 : 0))
-    titleLabel.frame = CGRect(x: textX, y: top, width: textWidth, height: titleHeight)
-    subtitleLabel.frame = CGRect(x: textX, y: top + titleHeight, width: textWidth, height: subtitleHeight)
-    if let dot = subtitlePresenceView {
-      let labelWidth = min(subtitleLabel.intrinsicContentSize.width, max(0, textWidth - 12))
-      let groupX = textX + (textWidth - labelWidth - 12) / 2
-      dot.frame = CGRect(x: rtl ? groupX + labelWidth + 6 : groupX,
-                         y: top + titleHeight + (subtitleHeight - 6) / 2, width: 6, height: 6)
-      subtitleLabel.frame = CGRect(x: rtl ? groupX : groupX + 12,
-                                   y: top + titleHeight, width: labelWidth, height: subtitleHeight)
-    }
-    let avatarX: CGFloat = rtl ? bounds.width - 44 : 12
-    avatarView?.frame = CGRect(x: avatarX, y: (bounds.height - 32) / 2, width: 32, height: 32)
-    presenceView?.frame = CGRect(x: avatarX + (rtl ? 0 : 24), y: (bounds.height - 32) / 2 + 24, width: 8, height: 8)
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    layer.cornerRadius = bounds.height / 2
   }
 }
 
 private final class NavigationClipView: UIView {
   var onLayout: (() -> Void)?
+  override func safeAreaInsetsDidChange() {
+    super.safeAreaInsetsDidChange()
+    setNeedsLayout()
+  }
   override func layoutSubviews() {
     super.layoutSubviews()
     onLayout?()
@@ -177,6 +216,7 @@ private final class NavigationContentController: UIViewController {
     view = scrollView
     scrollView.contentSize = CGSize(width: 1, height: 10000)
     scrollView.isUserInteractionEnabled = false
+    scrollView.scrollsToTop = false
     scrollView.backgroundColor = .clear
     if #available(iOS 26.0, *) {
       // Configure the native effect before UIKit lays out the bar; the
@@ -198,6 +238,7 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
   private let navigation: UINavigationController
   private let channel: FlutterMethodChannel
   private var offset: CGFloat = 0
+  private var controlBackground = UIColor.secondarySystemBackground
   private var alwaysFrosted = false
   private var usesSystemScrollEdge = false
   private var expandedBarHeight: CGFloat = 0
@@ -214,6 +255,7 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
   private var metrics: [String: Any]?
   private weak var trackedAvatar: UIButton?
   private var reportedAvatarFrame: CGRect?
+  private var flutterSafeTop: CGFloat = 0
 
   init(frame: CGRect, id: Int64, args: Any?, messenger: FlutterBinaryMessenger, parent: UIViewController?) {
     container = NavigationClipView(frame: frame)
@@ -234,6 +276,7 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
     if #available(iOS 27.0, *) {
       edgeScrollView.accessibilityIdentifier = "navigation-status-edge"
       edgeScrollView.isUserInteractionEnabled = false
+      edgeScrollView.scrollsToTop = false
       edgeScrollView.accessibilityElementsHidden = true
       edgeScrollView.backgroundColor = .clear
       edgeScrollView.contentInsetAdjustmentBehavior = .never
@@ -253,6 +296,8 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
       case "configure": self?.configure(call.arguments as? [String: Any] ?? [:])
       case "prepareForReveal":
         UIView.performWithoutAnimation {
+          self?.navigation.view.setNeedsLayout()
+          self?.navigation.navigationBar.setNeedsLayout()
           self?.container.setNeedsLayout()
           self?.container.layoutIfNeeded()
         }
@@ -274,6 +319,16 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
     let viewportHeight = container.window?.bounds.height ?? container.bounds.height
     edgeScrollView.frame = CGRect(x: 0, y: 0, width: container.bounds.width, height: viewportHeight)
     navigation.view.frame = edgeScrollView.frame
+    // Flutter's route can begin offscreen, where UIKit infers a zero safe area.
+    // Keep the toolbar below the status region throughout that transition.
+    // Read the unmodified host inset, never the inset we are adjusting.
+    // During a slide UIKit may not yet have applied the previous adjustment.
+    let automaticTop = container.safeAreaInsets.top
+    let requiredTop = max(0, flutterSafeTop - automaticTop)
+    if abs(navigation.additionalSafeAreaInsets.top - requiredTop) > 0.5 {
+      navigation.additionalSafeAreaInsets.top = requiredTop
+    }
+    navigation.view.setNeedsLayout()
     navigation.view.layoutIfNeeded()
     measureIfNeeded()
     applyScroll()
@@ -320,6 +375,8 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
   }
 
   private func configure(_ args: [String: Any]) {
+    controlBackground = Self.color(args["controlBackground"])
+    flutterSafeTop = (args["safeTop"] as? NSNumber)?.doubleValue ?? 0
     navigation.overrideUserInterfaceStyle = args["dark"] as? Bool == true ? .dark : .light
     material.overrideUserInterfaceStyle = navigation.overrideUserInterfaceStyle
     edgeScrollView.overrideUserInterfaceStyle = navigation.overrideUserInterfaceStyle
@@ -338,17 +395,19 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
       content.scrollView.topEdgeEffect.isHidden = !usesSystemScrollEdge || !alwaysFrosted || largeTitle
       edgeScrollView.isHidden = alwaysFrosted && !largeTitle
     }
+    // Large-title pages need material across the whole header: the stationary
+    // system edge only blurs the status area, leaving expanded text over rows.
     // iOS 26 does not composite this native edge over sibling Flutter content
     // in our embedding, so retain the ultra-thin material fallback there.
     // Conversations use the navigation controller's native edge. Other pages
     // use a stationary native edge so UIKit's large-title inset adjustments
     // cannot hide the status-area fade when the title expands or collapses.
-    material.isHidden = usesSystemScrollEdge
+    material.isHidden = usesSystemScrollEdge && !largeTitle
     // Let the native fade extend past the bar without enlarging its hit area.
     // The mirrored content is transparent and the bottom edge is hidden.
     container.clipsToBounds = !usesSystemScrollEdge
     let appearance = UINavigationBarAppearance()
-    if usesSystemScrollEdge {
+    if usesSystemScrollEdge && !largeTitle {
       appearance.configureWithDefaultBackground()
     } else {
       appearance.configureWithTransparentBackground()
@@ -411,13 +470,24 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
     trackedAvatar = nil
     reportedAvatarFrame = nil
     if let leading = args["leading"] as? [String: Any] {
-      item.leftBarButtonItems = [makeItem(leading)]
+      item.leftBarButtonItems = [makeControlGroup([leading])]
     } else if args["back"] as? Bool == true {
-      item.leftBarButtonItems = [makeItem(["id": "back", "label": "Back", "symbol": "chevron.backward", "enabled": true])]
+      item.leftBarButtonItems = [makeControlGroup([["id": "back", "label": "Back", "symbol": "chevron.backward", "enabled": true]])]
     } else {
       item.leftBarButtonItems = nil
     }
-    item.rightBarButtonItems = (args["actions"] as? [[String: Any]] ?? []).reversed().map(makeItem)
+    var groups: [[[String: Any]]] = []
+    for action in args["actions"] as? [[String: Any]] ?? [] {
+      let shares = action["sharesBackground"] as? Bool ?? true
+      if shares, let previous = groups.last?.last,
+         previous["sharesBackground"] as? Bool ?? true,
+         previous["plain"] as? Bool != true, action["plain"] as? Bool != true {
+        groups[groups.count - 1].append(action)
+      } else {
+        groups.append([action])
+      }
+    }
+    item.rightBarButtonItems = groups.reversed().map(makeControlGroup)
     if let metrics {
       channel.invokeMethod("metrics", arguments: metrics)
     }
@@ -460,6 +530,7 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
   }
 
   private func setScrollOffset(_ value: CGFloat) {
+    guard value.isFinite else { return }
     offset = max(0, value)
     material.alpha = alwaysFrosted ? 1 : min(1, offset / 12)
     applyScroll()
@@ -535,12 +606,94 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
   private func makeAction(_ data: [String: Any]) -> UIAction {
     let id = data["id"] as? String ?? ""
     let enabled = data["enabled"] as? Bool == true
-    let symbol = (data["symbol"] as? String).flatMap { UIImage(systemName: $0) }
+    let symbol = (data["symbol"] as? String).flatMap { NativeTabler.image($0, size: 24) }
     return UIAction(title: data["label"] as? String ?? "", image: symbol,
                     attributes: enabled ? [] : [.disabled],
                     state: data["selected"] as? Bool == true ? .on : .off) { [weak self] _ in
       self?.channel.invokeMethod("action", arguments: id)
     }
+  }
+
+  private func makeControlGroup(_ actions: [[String: Any]]) -> UIBarButtonItem {
+    if actions.count == 1 {
+      let item = makeItem(actions[0])
+      // Let UIKit retain its navigation typography and sizing for text actions
+      // such as Edit/Done, rather than inheriting UIButton's default styling.
+      if actions[0]["plain"] as? Bool == true || (item.image == nil && item.customView == nil) {
+        return item
+      }
+    }
+    let surface = UIVisualEffectView()
+    if #available(iOS 26.0, *) {
+      let glass = UIGlassEffect(style: .regular)
+      glass.isInteractive = true
+      surface.effect = glass
+      surface.cornerConfiguration = .capsule()
+    } else {
+      surface.backgroundColor = controlBackground
+    }
+    // Match the navigation bar's 44-point content height so single
+    // controls remain circular rather than being compressed vertically.
+    surface.layer.cornerRadius = 22
+    surface.layer.cornerCurve = .circular
+    surface.clipsToBounds = true
+    let stack = UIStackView()
+    stack.axis = .horizontal
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    surface.contentView.addSubview(stack)
+    for data in actions {
+      let item = makeItem(data)
+      let button: UIButton
+      if let avatar = item.customView as? UIButton {
+        button = avatar
+      } else {
+        button = UIButton(type: .system)
+        button.setImage(item.image, for: .normal)
+        if item.image == nil { button.setTitle(item.title, for: .normal) }
+        if let action = item.primaryAction { button.addAction(action, for: .touchUpInside) }
+        button.menu = item.menu
+        button.showsMenuAsPrimaryAction = item.menu != nil
+        if item.menu != nil {
+          // UIKit lifts the button itself for its menu transition, not the
+          // enclosing glass. Give that return target the same rounded shape.
+          if #available(iOS 26.0, *) {
+            button.cornerConfiguration = .capsule()
+          }
+          button.layer.cornerRadius = 22
+          button.layer.cornerCurve = .circular
+          button.clipsToBounds = true
+        }
+        button.isEnabled = item.isEnabled
+        button.accessibilityLabel = item.accessibilityLabel
+        button.accessibilityValue = item.accessibilityValue
+      }
+      button.tintColor = navigation.navigationBar.tintColor
+      let slot = UIView()
+      slot.addSubview(button)
+      button.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        slot.widthAnchor.constraint(equalToConstant: item.image == nil && item.customView == nil ? max(44, button.intrinsicContentSize.width + 16) : 44),
+        slot.heightAnchor.constraint(equalToConstant: 44),
+        button.centerXAnchor.constraint(equalTo: slot.centerXAnchor),
+        button.centerYAnchor.constraint(equalTo: slot.centerYAnchor)
+      ])
+      if item.customView == nil {
+        NSLayoutConstraint.activate([
+          button.widthAnchor.constraint(equalTo: slot.widthAnchor),
+          button.heightAnchor.constraint(equalTo: slot.heightAnchor)
+        ])
+      }
+      stack.addArrangedSubview(slot)
+    }
+    NSLayoutConstraint.activate([
+      stack.leadingAnchor.constraint(equalTo: surface.contentView.leadingAnchor),
+      stack.trailingAnchor.constraint(equalTo: surface.contentView.trailingAnchor),
+      stack.topAnchor.constraint(equalTo: surface.contentView.topAnchor),
+      stack.bottomAnchor.constraint(equalTo: surface.contentView.bottomAnchor)
+    ])
+    let item = UIBarButtonItem(customView: surface)
+    if #available(iOS 26.0, *) { item.hidesSharedBackground = true }
+    return item
   }
 
   private func makeItem(_ data: [String: Any]) -> UIBarButtonItem {
@@ -552,19 +705,30 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
                         menu: UIMenu(children: children.map(makeAction)))
     if #available(iOS 26.0, *) {
       item.hidesSharedBackground = data["plain"] as? Bool == true
+      item.sharesBackground = data["sharesBackground"] as? Bool ?? true
     }
     item.accessibilityLabel = data["label"] as? String
     item.isEnabled = data["enabled"] as? Bool == true
     if data["avatarInitial"] is String { item.title = nil }
+    if let encoded = data["iconData"] as? String,
+       let bytes = Data(base64Encoded: encoded), let image = UIImage(data: bytes) {
+      item.image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { _ in
+        image.draw(in: CGRect(x: 0, y: 0, width: 24, height: 24))
+      }.withRenderingMode(.alwaysTemplate)
+      item.title = nil
+    }
+
     if let encoded = data["imageData"] as? String,
        let bytes = Data(base64Encoded: encoded), let image = UIImage(data: bytes) {
-      // Fill the 44-point native button with a 4-point inset. Keep the
-      // original 24-point alignment footprint so UIKit does not widen it.
-      let size = CGSize(width: 36, height: 36)
+      // Character artwork floats on the glass; photos fill its circular face.
+      // Preserve the 24-point alignment footprint so UIKit does not widen it.
+      let diameter: CGFloat = data["avatarIsAgent"] as? Bool == true && data["avatarArtwork"] as? Bool != true ? 44 : 36
+      let inset = (diameter - 24) / 2
+      let size = CGSize(width: diameter, height: diameter)
       item.image = UIGraphicsImageRenderer(size: size).image { _ in
         image.draw(in: CGRect(origin: .zero, size: size))
       }.withRenderingMode(.alwaysOriginal).withAlignmentRectInsets(
-        UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        UIEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
       )
     }
     if item.image == nil, let initial = data["avatarInitial"] as? String {
@@ -575,7 +739,7 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
       item.image = UIGraphicsImageRenderer(size: size).image { _ in
         Self.color(data["avatarBackground"]).setFill()
         UIBezierPath(roundedRect: CGRect(origin: .zero, size: size),
-                     cornerRadius: size.width * (data["avatarIsAgent"] as? Bool == true ? 0.3 : 0.5)).fill()
+                     cornerRadius: size.width * 0.5).fill()
         let text = initial as NSString
         let attributes: [NSAttributedString.Key: Any] = [
           .font: UIFont.systemFont(ofSize: 16, weight: .medium),
@@ -599,8 +763,7 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
       }.withRenderingMode(.alwaysOriginal)
       item.accessibilityValue = data["activityLabel"] as? String
     }
-    if data["tracksAvatarBounds"] as? Bool == true, data["id"] as? String == "leading",
-       data["avatarInitial"] is String {
+    if data["avatarInitial"] is String, children.isEmpty {
       // An explicit native button gives Flutter a public, measured destination
       // without depending on UINavigationBar's private view hierarchy.
       let button = UIButton(type: .custom)
@@ -613,12 +776,22 @@ private final class IosNavigationBarView: NSObject, FlutterPlatformView {
       button.addAction(action, for: .touchUpInside)
       button.isEnabled = item.isEnabled
       button.accessibilityLabel = item.accessibilityLabel
-      button.accessibilityIdentifier = "community-navigation-avatar"
+      button.accessibilityIdentifier = data["id"] as? String == "leading"
+        ? "community-navigation-avatar" : "profile-navigation-avatar"
       let hidden = data["avatarHidden"] as? Bool == true
       button.alpha = hidden ? 0 : 1
       button.accessibilityElementsHidden = hidden
-      trackedAvatar = button
-      return UIBarButtonItem(customView: button)
+      if data["tracksAvatarBounds"] as? Bool == true, data["id"] as? String == "leading" {
+        trackedAvatar = button
+      }
+      // Both edge avatars use the same footprint and native glass padding,
+      // keeping their containers aligned to UIKit's symmetric navigation gutter.
+      let avatarItem = UIBarButtonItem(customView: button)
+      if #available(iOS 26.0, *) {
+        avatarItem.hidesSharedBackground = data["plain"] as? Bool == true
+        avatarItem.sharesBackground = data["sharesBackground"] as? Bool ?? true
+      }
+      return avatarItem
     }
     return item
   }

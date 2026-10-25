@@ -74,6 +74,10 @@ const { resetRateLimitGate } = await import("@/shared/api/relayRateLimitGate");
 const { buildHuddleTtsLiveFilter } = await import(
   "@/shared/api/relayChannelFilters"
 );
+const { REPLAY_INTER_BATCH_DELAY_MS } = await import(
+  "@/shared/api/relayReconnectReplay"
+);
+const REPLAY_DRAIN_MS = Math.ceil(297 / 8) * REPLAY_INTER_BATCH_DELAY_MS;
 const { useTtsSubscription } = await import("./useTtsSubscription.ts");
 const flush = async () => {
   for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -132,7 +136,7 @@ afterEach(async () => {
   });
   relayClient.disconnect();
   resetRateLimitGate();
-  await advance(50);
+  await advance(REPLAY_INTER_BATCH_DELAY_MS);
   assert.equal(
     timers.size,
     0,
@@ -300,7 +304,7 @@ for (const visibleChannel of [null, "cold-295"]) {
       spoken.map(({ text }) => text),
       ["Already spoken", "New speech"],
     );
-    await advance(49);
+    await advance(REPLAY_INTER_BATCH_DELAY_MS - 1);
     assert.equal(requests().length, 8, "retain inter-batch delay");
     await advance(1);
     assert.equal(requests().length, 16);
@@ -309,7 +313,7 @@ for (const visibleChannel of [null, "cold-295"]) {
     assert.equal(requests().length, 16, "recheck cooldown between batches");
     await advance(1);
     assert.equal(requests().length, 24);
-    await advance(2000);
+    await advance(REPLAY_DRAIN_MS);
     await replay;
     relayClient.reconnectWaiters.settle();
     await flush();
@@ -320,7 +324,9 @@ for (const visibleChannel of [null, "cold-295"]) {
     );
     assert.equal(new Set(requests().map(({ frame }) => frame[1])).size, 297);
     for (let i = 8; i < requests().length; i += 8)
-      assert.ok(requests()[i].at - requests()[i - 1].at >= 50);
+      assert.ok(
+        requests()[i].at - requests()[i - 1].at >= REPLAY_INTER_BATCH_DELAY_MS,
+      );
     assert.equal(requests()[0].at, replayStart);
     await advance(1000);
     assert.equal(
@@ -347,7 +353,7 @@ test("unmounting the companion TTS hook during reconnect cooldown cancels its ow
     await flush();
   });
   assert.equal(relayClient.subscriptions.has(id), false);
-  await advance(6000);
+  await advance(4000 + REPLAY_DRAIN_MS);
   await replay;
   relayClient.reconnectWaiters.settle();
   await flush();
