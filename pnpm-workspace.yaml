@@ -71,7 +71,7 @@ overrides:
   # 1.25.12 while tiptap-markdown/prosemirror-markdown kept 1.25.4 — one copy
   # (markdown output must be assignable to editor state).
   "prosemirror-model": 1.25.12
-  "seroval@1.5.4": 1.6.3 # GHSA-jp82-f5mq-hwhp, GHSA-p6vx-979v-rg4c
+  "seroval@1.5.4": 1.6.11 # GHSA-jp82-f5mq-hwhp, GHSA-p6vx-979v-rg4c
   "source-map-js@1.2.1": 1.2.2 # GHSA-68fv-2mgg-jv7q
   "vite@8.0.16": 8.1.6 # GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-9jrq-w75r-8gcw, GHSA-r825-w8mm-5pxw, GHSA-rq7h-c2jc-7f22
   "zod@4.4.3": 4.6.7 # GHSA-mrhx-c7xc-m3w5

@@ -85,6 +85,8 @@ fn read_element_text(
 ) -> Result<String, MediaError> {
     reader
         .read_text(start.to_end().name())
+        .map_err(xml_error)?
+        .decode()
         .map(|text| text.into_owned())
         .map_err(xml_error)
 }
