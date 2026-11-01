@@ -44,9 +44,10 @@ Offener Betriebspunkt (01.11.2026, claude): Alle Events liegen in der
 Auffang-Partition `events_p_future`, Monatspartitionen gibt es nur bis Juni
 2026. Seit upstream #8464 will das Relay die Auffang-Partition weiterschieben
 und meldet bei jedem Start `Failed to ensure partitions` mit „advancing it
-requires an operator“. Der Start läuft „degraded“ weiter,
-`partition_catalog.serving_safe` bleibt true. Die Umverteilung in
-Monatspartitionen ist ein eigener Operator-Schritt mit Backup.
+requires an operator“. Der Start läuft weiter; der Startschritt
+`PartitionEnsure` endet als `degraded`, `partition_catalog.serving_safe`
+bleibt true. Die Umverteilung in Monatspartitionen ist ein eigener
+Operator-Schritt mit Backup.
 
 ## Aktiver Stand
 
@@ -56,8 +57,9 @@ Deployment vom 01.11.2026 (claude, Freigabe durch Christian am selben Tag):
   mit den Sicherheitsupdates vom 31.10. Enthaltener Upstream: `9e8c9fc04`
   (Abgleich vom 25.10.).
 - Anlass: Buzz 1.0 (`block/buzz-app`) blendet Funktionen aus, die das Relay im
-  NIP-11 nicht anbietet. Neu angeboten werden `nip-cl` (Solo-Chats,
-  Kanal-Labels, System-Kanäle) und `buzz-search-sort`, dazu Personensuche über
+  NIP-11 nicht anbietet. Neu angeboten werden `nip-cl` (Kanal-Identität,
+  Labels — darunter Solo-Chats über `t=buzz.solo` — und System-Kanäle) und
+  `buzz-search-sort`, dazu Personensuche über
   `/profiles/search` und Agenten-Presence (kind 20003). Live-Sync für Artefakte
   (`artifacts.sync`, upstream #8522 vom 30.10.) ist noch nicht enthalten.
 - Nur `buzz-relay` und `buzz-pair-relay` installiert (per Umbenennen) und neu
@@ -91,9 +93,11 @@ Backups liegen geschützt auf Studio 2 unter
 
 Rückweg nur über den Dump: Die Migrationen 0058 und 0060 entfernen Spalten,
 0063 und 0065 Trigger. Das alte Binary läuft deshalb nicht auf Schema 68, ein
-Tausch der Binaries allein reicht nicht. Ablauf: Relay stoppen, Datenbank
-`buzz` neu anlegen, Dump in drei Durchgängen einspielen (siehe oben), alte
-Binaries zurück, Relay starten. Schreibvorgänge seit dem Dump gehen verloren.
+Tausch der Binaries allein reicht nicht. Ablauf: beide Relay-Dienste
+(`com.buzz.relay`, `com.buzz.pair-relay`) per `launchctl bootout` stoppen und
+deaktivieren, Datenbank `buzz` neu anlegen, Dump in drei Durchgängen einspielen
+(siehe oben), alte Binaries zurück, Relay starten. Schreibvorgänge seit dem Dump
+gehen verloren.
 
 ## Historischer Stand vom 07.10.2026
 
