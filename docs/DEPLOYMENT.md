@@ -6,7 +6,7 @@ Dieses Runbook beschreibt den privaten Buzz-Backend-Betrieb auf Mac Studio 2.
 
 - Checkout: `/Users/cschroeder/Github/buzz`, Branch `customizing/cschroeder`
 - Build aus isoliertem Git-Arbeitsbaum mit separatem `CARGO_TARGET_DIR`:
-  `BUZZ_SOURCE_SHA=$(git rev-parse HEAD) BUZZ_BUILD_ID=backend-20261007-studio2 BUZZ_BUILD_URL=https://github.com/cwschroeder/buzz/commit/$(git rev-parse HEAD) cargo build --release --locked -p buzz-relay -p buzz-pair-relay`
+  `BUZZ_SOURCE_SHA=$(git rev-parse HEAD) BUZZ_BUILD_ID=backend-<JJJJMMTT>-studio2 BUZZ_BUILD_URL=https://github.com/cwschroeder/buzz/commit/$(git rev-parse HEAD) cargo build --release --locked -p buzz-relay -p buzz-pair-relay`
 - Eingebauten Quellcommit und Abhängigkeiten am lokalen Health-Listener
   `http://127.0.0.1:8088/_status` prüfen; Readiness allein belegt diese nicht.
 - Dienste: `com.buzz.relay` und `com.buzz.pair-relay`
@@ -23,7 +23,79 @@ WICHTIG: Die Postgres-Lane `cargo test -p buzz-db -- --ignored` zerstört die
 unter `DATABASE_URL` benannte Datenbank (siehe LEARNINGS.md 2026-09-18). Sie
 gehört ausschließlich gegen eine Wegwerf-Kratzdatenbank, nie gegen `buzz`.
 
+Dump wiederherstellen: Ein `pg_restore` in einem Durchgang verliert alle
+Events, weil der Trigger der Community-Schreibsperre beim Restore seine
+Hilfsfunktion nicht findet. Deshalb in drei Durchgängen einspielen:
+`--section=pre-data`, dann `--section=data --disable-triggers`, dann
+`--section=post-data`. `--disable-triggers` braucht einen Superuser; im
+Container ist `buzz` der `POSTGRES_USER`. Belegt bei der Migrationsprobe am
+01.11.2026.
+
+Migrationsprobe ohne Nebenwirkungen: `buzz-admin migrate` aus demselben Stand
+gegen eine Kopie in einer Wegwerf-Instanz. Für einen Probestart des Relays
+gegen die Kopie zusätzlich Wegwerfwerte für `BUZZ_RELAY_PRIVATE_KEY` und
+`RELAY_OWNER_PUBKEY`, `BUZZ_GIT_CONFORMANCE_PROBE=false` und eigene Ports
+setzen. Vorher prüfen, dass Operator-Listener, Workflows und Push-Leases in der
+Kopie leer sind. Auf Studio 2 sind dafür `libpq` und `cargo-nextest` per
+Homebrew installiert. Die Postgres-Spur läuft mit `scripts/postgres-test-run.sh`
+und `BUZZ_POSTGRES_ADMIN_URL` auf die Wegwerf-Instanz.
+
+Offener Betriebspunkt (01.11.2026, claude): Alle Events liegen in der
+Auffang-Partition `events_p_future`, Monatspartitionen gibt es nur bis Juni
+2026. Seit upstream #8464 will das Relay die Auffang-Partition weiterschieben
+und meldet bei jedem Start `Failed to ensure partitions` mit „advancing it
+requires an operator“. Der Start läuft „degraded“ weiter,
+`partition_catalog.serving_safe` bleibt true. Die Umverteilung in
+Monatspartitionen ist ein eigener Operator-Schritt mit Backup.
+
 ## Aktiver Stand
+
+Deployment vom 01.11.2026 (claude, Freigabe durch Christian am selben Tag):
+
+- Laufzeit-Code: `f2f76c4faf5ff1d3a12978b4c8187d798a8e2809`, Merge von PR #2
+  mit den Sicherheitsupdates vom 31.10. Enthaltener Upstream: `9e8c9fc04`
+  (Abgleich vom 25.10.).
+- Anlass: Buzz 1.0 (`block/buzz-app`) blendet Funktionen aus, die das Relay im
+  NIP-11 nicht anbietet. Neu angeboten werden `nip-cl` (Solo-Chats,
+  Kanal-Labels, System-Kanäle) und `buzz-search-sort`, dazu Personensuche über
+  `/profiles/search` und Agenten-Presence (kind 20003). Live-Sync für Artefakte
+  (`artifacts.sync`, upstream #8522 vom 30.10.) ist noch nicht enthalten.
+- Nur `buzz-relay` und `buzz-pair-relay` installiert (per Umbenennen) und neu
+  gestartet. Web-Assets, Desktop und Agenten unverändert.
+- Relay SHA-256: `06be8367310ccc7df7e5e2591f835c43f55e8edb8ccb6d407416e6d188faf370`.
+- Pair-Relay SHA-256: `db7561b768c18786d552505af95ef557ada6ec4debf39405324284e7ab55ed69`.
+- PIDs bei Abschluss: Relay `73829`, Pair-Relay `73847`.
+- Migrationen 57 bis 68 beim Start erfolgreich. 39.296 Events vor und nach dem
+  Neustart.
+- Live-Status: Build-ID `backend-20261101-studio2`, Quellcommit wie oben,
+  PostgreSQL und Redis erreichbar, Partitionenkatalog sicher.
+- Externe Nachweise: öffentliche Readiness `ready`. NIP-11 mit unverändertem
+  `self`, unveränderter `community_id` `4de1e03a-3a00-428f-8d3a-96a664cd8324`
+  und gleichen `supported_nips`, neu mit `nip-cl` und `buzz-search-sort`.
+  Authentifizierter Kanal-Lesezugriff, Pair-WebSocket beantwortet eine
+  Subscription mit EOSE, wieder 4 aktive WebSocket-Verbindungen wie vor dem
+  Neustart.
+- Log nach dem Neustart: einmal `ERROR Failed to ensure partitions` (siehe
+  offener Betriebspunkt oben), sonst kein ERROR oder Panic.
+- Keine GUI-Prüfung, der Bildschirm des MacBooks war gesperrt. Mobile ungeprüft.
+- Tests und Probe: [Aufgabenbericht](../tasks/backend-upstream-20261101/README.md).
+
+Backups liegen geschützt auf Studio 2 unter
+`~/Library/Application Support/Buzz Pilot/backups/backend-20261101`:
+
+- Dump direkt vor dem Neustart: `buzz-before-update-20261101-174834.dump`,
+  SHA-256 `b60ce38f97ec79cdaae3fd252d101746308112a563f41d93c57780b92efeeb58`,
+  `pg_restore -l` mit 672 Zeilen.
+- Alte Binaries `buzz-relay-9e8bd7d` und `buzz-pair-relay-9e8bd7d` (Hashes wie
+  im Stand vom 07.10.) sowie das NIP-11 vor dem Update, `nip11-before.json`.
+
+Rückweg nur über den Dump: Die Migrationen 0058 und 0060 entfernen Spalten,
+0063 und 0065 Trigger. Das alte Binary läuft deshalb nicht auf Schema 68, ein
+Tausch der Binaries allein reicht nicht. Ablauf: Relay stoppen, Datenbank
+`buzz` neu anlegen, Dump in drei Durchgängen einspielen (siehe oben), alte
+Binaries zurück, Relay starten. Schreibvorgänge seit dem Dump gehen verloren.
+
+## Historischer Stand vom 07.10.2026
 
 Deployment vom 07.10.2026:
 

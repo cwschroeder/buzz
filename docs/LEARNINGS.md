@@ -142,3 +142,20 @@ ergänzt.
   `BUZZ_BUILD_URL`. Ohne diese meldet der Laufzeitstatus unknown. Nach dem
   Deployment den eingebauten Commit prüfen, zusätzlich zu Binary-Hash und
   Checkout-Stand.
+
+## 2026-11-01: Relay-Update für Buzz 1.0 (claude)
+
+- Buzz 1.0 (`block/buzz-app`) liest die Fähigkeiten des Relays aus dem NIP-11
+  und blendet Fehlendes aus, ohne dass beim Relay eine Anfrage ankommt. Ein
+  fehlerfreies Relay-Log belegt deshalb nicht, dass eine Funktion geht. Nach
+  einem Update `supported_extensions` im öffentlichen NIP-11 prüfen.
+- `pg_restore` eines Produktionsdumps in einem Durchgang verliert alle Events:
+  Der Trigger der Community-Schreibsperre ruft seine Hilfsfunktion ohne Schema
+  auf und findet sie beim Restore nicht. Drei Durchgänge (`pre-data`, `data`
+  mit `--disable-triggers`, `post-data`) stellen alles her.
+- `buzz-admin migrate` führt dieselbe Migration aus wie der Relay-Start und
+  eignet sich für die Probe gegen eine Kopie. Ein Probestart des Relays braucht
+  zusätzlich Wegwerfschlüssel, `BUZZ_GIT_CONFORMANCE_PROBE=false` und leere
+  Operator-Listener, Workflows und Push-Leases in der Kopie.
+- Ab Migration 0058 gibt es keinen Rückweg per Binärtausch mehr, nur über den
+  Dump. Den Dump deshalb als letzten Schritt direkt vor dem Neustart ziehen.
