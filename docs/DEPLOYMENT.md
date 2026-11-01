@@ -73,7 +73,8 @@ Deployment vom 01.11.2026 (claude, Freigabe durch Christian am selben Tag):
   PostgreSQL und Redis erreichbar, Partitionenkatalog sicher.
 - Externe Nachweise: öffentliche Readiness `ready`. NIP-11 mit unverändertem
   `self`, unveränderter `community_id` `4de1e03a-3a00-428f-8d3a-96a664cd8324`
-  und gleichen `supported_nips`, neu mit `nip-cl` und `buzz-search-sort`.
+  und gleichen `supported_nips`; `supported_extensions` neu mit `nip-cl` und
+  `buzz-search-sort`.
   Authentifizierter Kanal-Lesezugriff, Pair-WebSocket beantwortet eine
   Subscription mit EOSE, wieder 4 aktive WebSocket-Verbindungen wie vor dem
   Neustart.
