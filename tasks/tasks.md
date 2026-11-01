@@ -49,3 +49,11 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 - Quellintegration von `origin/main` (`9e8c9fc04`) mit erhaltenen Anpassungen.
   [Konfliktauflösung und Prüfergebnisse](upstream-20261025/README.md).
 - Nicht live; Büro-Netzausfall, vollständiger Build und Rollout bleiben offen.
+
+## 2026-11-01 - Relay-Update für Buzz 1.0 (claude)
+
+| Status | Aufgabe | Details |
+|---|---|---|
+| erledigt | `f2f76c4fa` (Upstream `9e8c9fc04` plus Sicherheitsupdates aus PR #2) als Relay und Pair-Relay auf Mac Studio 2 ausgerollt | [Prüfung und Nachweise](backend-upstream-20261101/README.md) |
+| offen | Events aus der Auffang-Partition `events_p_future` in Monatspartitionen umverteilen (Operator-Schritt mit Backup) | `docs/DEPLOYMENT.md`, offener Betriebspunkt |
+| offen | Upstream ab `a56966b77` (#8522, Live-Sync für Artefakte) und die korrigierte Testvorbereitung `d6196a16c` übernehmen | `backend-upstream-20261101/README.md` |
