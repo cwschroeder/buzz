@@ -1847,6 +1847,20 @@ mod postgres_tests {
         );
     }
 
+    /// RUSTSEC-2026-0433: 0.13.5 rescanned nested image wikilinks
+    /// quadratically and collapsed their bodies (six events regardless of
+    /// depth). 0.13.6 keeps one text event per body, so the event count grows
+    /// linearly; this test fails if the lockfile drops below 0.13.6.
+    #[test]
+    fn nested_image_wikilinks_keep_linear_body_events() {
+        use pulldown_cmark::{Options, Parser};
+
+        const DEPTH: usize = 1_000;
+        let markdown = format!("{}{}", "![[".repeat(DEPTH), "]]".repeat(DEPTH));
+        let events = Parser::new_ext(&markdown, Options::ENABLE_WIKILINKS).count();
+        assert_eq!(events, 4 * DEPTH - 2);
+    }
+
     #[test]
     fn policy_document_renders_markdown_and_escapes_raw_html() {
         let page = super::render_policy_document(
