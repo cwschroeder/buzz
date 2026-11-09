@@ -157,12 +157,10 @@ async fn mcp_init_timeout_kills_child() {
     h.shutdown().await;
 }
 
-/// A real MCP server that returns 150 tools with 100KB descriptions must
-/// be capped: tool count ≤ MAX_TOOLS_PER_SESSION (128) — we expect spawn_all
-/// to either reject (too many) OR truncate. We assert the spawn succeeds with
-/// a bounded count, and that descriptions sent to the LLM are ≤ 1024 bytes.
-/// (rmcp 3 caps stdio lines at 16 MiB, so 200 tools would be dropped
-/// before the cap; 150 tools stay under it.)
+/// A real MCP server that returns 150 tools with 100KB descriptions must be
+/// rejected by the tool-count cap (MAX_TOOLS_PER_SESSION = 128).
+/// (rmcp 3 caps stdio lines at 16 MiB, so 200 tools would be dropped before
+/// the cap; 150 tools stay under it and reach the count check.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_metadata_caps_enforced() {
     let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
@@ -195,16 +193,33 @@ async fn tool_metadata_caps_enforced() {
         .recv_until(|v| v.get("result").is_some() || v.get("error").is_some())
         .await;
 
-    // Either spawn rejects (200 > 128 cap) — that's acceptable hardening —
-    // OR it accepts and we verify the LLM request stays bounded.
-    if r.get("error").is_some() {
-        let msg = r["error"]["message"].as_str().unwrap_or("");
-        assert!(msg.contains("too many"), "unexpected error: {msg}");
-        h.shutdown().await;
-        return;
-    }
+    let msg = r["error"]["message"].as_str().unwrap_or("");
+    assert!(msg.contains("too many"), "unexpected error: {msg}");
+    h.shutdown().await;
+}
 
-    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+/// 128 tools with 100KB descriptions are accepted; descriptions sent to the
+/// LLM are capped at 1024 bytes. 128 is the largest accepted count, and
+/// 128 × 100KB ≈ 12.8 MB stays under rmcp 3's 16 MiB stdio line limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_metadata_description_cap_enforced() {
+    let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
+    let mut h = Harness::spawn(&llm.url).await;
+
+    let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
+    let sid = init_session(
+        &mut h,
+        json!([{
+            "name": "many",
+            "command": fake_mcp,
+            "args": [],
+            "env": [
+                { "name": "FAKE_MCP_TOOL_COUNT", "value": "128" },
+                { "name": "FAKE_MCP_HUGE_DESC", "value": "1" },
+            ],
+        }]),
+    )
+    .await;
     let p = h
         .send(
             "session/prompt",
@@ -216,7 +231,11 @@ async fn tool_metadata_caps_enforced() {
     let captured = llm.captured.lock().await;
     assert!(!captured.is_empty(), "no LLM request captured");
     let tools = captured[0]["tools"].as_array().unwrap();
-    assert!(tools.len() <= 128, "tool count not capped: {}", tools.len());
+    assert!(
+        tools.len() >= 128,
+        "expected all accepted tools, got {}",
+        tools.len()
+    );
     for t in tools {
         let desc = t["function"]["description"].as_str().unwrap_or("");
         assert!(

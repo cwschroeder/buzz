@@ -21,8 +21,8 @@ tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Discovery-based clients (including Goose 1.52) require the modern lifecycle.
-# Keep the native agent's independent MCP client dependency unchanged.
-rmcp = { version = "3.9.0", features = ["server", "transport-io", "macros"] }
+# The native agent keeps its own rmcp client dependency with different features.
+rmcp = { workspace = true }
 schemars = { workspace = true }
 similar = "3"
 tempfile = "3"
