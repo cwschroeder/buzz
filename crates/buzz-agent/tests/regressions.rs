@@ -157,10 +157,12 @@ async fn mcp_init_timeout_kills_child() {
     h.shutdown().await;
 }
 
-/// A real MCP server that returns 200 tools with 100KB descriptions must
+/// A real MCP server that returns 150 tools with 100KB descriptions must
 /// be capped: tool count ≤ MAX_TOOLS_PER_SESSION (128) — we expect spawn_all
 /// to either reject (too many) OR truncate. We assert the spawn succeeds with
 /// a bounded count, and that descriptions sent to the LLM are ≤ 1024 bytes.
+/// (rmcp 3 caps stdio lines at 16 MiB, so 200 tools would be dropped
+/// before the cap; 150 tools stay under it.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_metadata_caps_enforced() {
     let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
@@ -182,7 +184,7 @@ async fn tool_metadata_caps_enforced() {
                 "command": fake_mcp,
                 "args": [],
                 "env": [
-                    { "name": "FAKE_MCP_TOOL_COUNT", "value": "200" },
+                    { "name": "FAKE_MCP_TOOL_COUNT", "value": "150" },
                     { "name": "FAKE_MCP_HUGE_DESC", "value": "1" },
                 ],
             }],
