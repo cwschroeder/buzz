@@ -1,4 +1,13 @@
+import org.gradle.api.artifacts.dsl.LockMode
+
 allprojects {
+    dependencyLocking {
+        lockAllConfigurations()
+        // LENIENT: Gradle 8.14.5 resolves the kotlin-stdlib-common constraint
+        // during AAR metadata checks without persisting it to the lockfile;
+        // strict mode would fail the Android build for that constraint.
+        lockMode = LockMode.LENIENT
+    }
     repositories {
         google()
         mavenCentral()
