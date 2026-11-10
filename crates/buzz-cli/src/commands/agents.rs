@@ -244,7 +244,7 @@ async fn cmd_profile_set(
 ) -> Result<(), CliError> {
     let content = agent_profile_content(name, channels, channel_ids, allow_pubkeys)?;
     let builder = EventBuilder::new(Kind::Custom(KIND_AGENT_PROFILE as u16), content.to_string());
-    let event = client.sign_event(builder)?;
+    let event = client.sign_event(builder).await?;
     let response = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&response));
     Ok(())
@@ -253,7 +253,7 @@ async fn cmd_profile_set(
 async fn cmd_profile_get(client: &BuzzClient, pubkey: Option<&str>) -> Result<(), CliError> {
     let pubkey = pubkey
         .map(str::to_string)
-        .unwrap_or_else(|| client.keys().public_key().to_hex());
+        .unwrap_or_else(|| client.public_key().to_hex());
     validate_hex64(&pubkey)?;
     let pubkey = pubkey.to_ascii_lowercase();
     let raw = client

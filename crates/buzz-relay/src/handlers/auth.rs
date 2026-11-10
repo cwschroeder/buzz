@@ -1860,7 +1860,8 @@ mod tests {
             ),
         ] {
             let harness = AuthHarness::new(false);
-            let attempt = AuthAttempt::nip42(&harness.conn, harness.key.public_key(), true);
+            let attempt =
+                crate::access::AuthAttempt::nip42(&harness.conn, harness.key.public_key(), true);
             super::deny_admission(
                 &harness.conn,
                 &attempt,
