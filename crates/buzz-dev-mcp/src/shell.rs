@@ -1045,7 +1045,9 @@ mod tests {
             ShellParams {
                 command: "echo hello".into(),
                 workdir: None,
-                timeout_ms: Some(5_000),
+                // The production default: a cold Git Bash start on a Windows
+                // runner can take more than 5 s. `timeout_fires` covers timeouts.
+                timeout_ms: None,
             },
             CancellationToken::new(),
         )
@@ -1093,7 +1095,7 @@ mod tests {
             ShellParams {
                 command: "pwd".into(),
                 workdir: Some(sub.display().to_string()),
-                timeout_ms: Some(5_000),
+                timeout_ms: None,
             },
             CancellationToken::new(),
         )

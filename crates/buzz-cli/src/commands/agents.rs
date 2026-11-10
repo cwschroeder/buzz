@@ -20,14 +20,15 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
         } => {
             let owner = require_owner(client)?;
             let built = build_create(
-                client.keys(),
+                client.credentials(),
                 &owner,
                 CreateAgentDraft {
                     channel_id: channel,
                     display_name,
                     system_prompt: read_or_stdin(&system_prompt)?,
                 },
-            )?;
+            )
+            .await?;
             let response = client.publish_ephemeral_event(built.event).await?;
             let mut output: serde_json::Value = serde_json::from_str(&response)
                 .map_err(|e| CliError::Other(format!("invalid relay response: {e}")))?;
@@ -57,7 +58,7 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
         } => {
             let owner = require_owner(client)?;
             let built = build_update(
-                client.keys(),
+                client.credentials(),
                 &owner,
                 UpdateAgentDraft {
                     channel_id: channel,
@@ -69,7 +70,8 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
                     model,
                     respond_to: respond_to.map(RespondToArg::to_wire),
                 },
-            )?;
+            )
+            .await?;
             let response = client.publish_ephemeral_event(built.event).await?;
             let mut output: serde_json::Value = serde_json::from_str(&response)
                 .map_err(|e| CliError::Other(format!("invalid relay response: {e}")))?;
@@ -104,7 +106,7 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
             admin,
         } => {
             validate_hex64(&target_pubkey)?;
-            let signer_hex = client.keys().public_key().to_hex();
+            let signer_hex = client.public_key().to_hex();
             let auth = resolve_auth(
                 client,
                 &target_pubkey,
@@ -121,7 +123,7 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
                 auth.as_ref(),
             )
             .map_err(|e| CliError::Usage(format!("invalid archive request: {e}")))?;
-            let event = client.sign_event_unchecked(builder)?;
+            let event = client.sign_event_unchecked(builder).await?;
             let event_id = event.id.to_hex();
             client.submit_event(event).await?;
             println!(
@@ -143,7 +145,7 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
             admin,
         } => {
             validate_hex64(&target_pubkey)?;
-            let signer_hex = client.keys().public_key().to_hex();
+            let signer_hex = client.public_key().to_hex();
             let auth = resolve_auth(
                 client,
                 &target_pubkey,
@@ -159,7 +161,7 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
                 auth.as_ref(),
             )
             .map_err(|e| CliError::Usage(format!("invalid unarchive request: {e}")))?;
-            let event = client.sign_event_unchecked(builder)?;
+            let event = client.sign_event_unchecked(builder).await?;
             let event_id = event.id.to_hex();
             client.submit_event(event).await?;
             println!(
@@ -242,7 +244,7 @@ async fn cmd_profile_set(
 ) -> Result<(), CliError> {
     let content = agent_profile_content(name, channels, channel_ids, allow_pubkeys)?;
     let builder = EventBuilder::new(Kind::Custom(KIND_AGENT_PROFILE as u16), content.to_string());
-    let event = client.sign_event(builder)?;
+    let event = client.sign_event(builder).await?;
     let response = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&response));
     Ok(())
@@ -251,7 +253,7 @@ async fn cmd_profile_set(
 async fn cmd_profile_get(client: &BuzzClient, pubkey: Option<&str>) -> Result<(), CliError> {
     let pubkey = pubkey
         .map(str::to_string)
-        .unwrap_or_else(|| client.keys().public_key().to_hex());
+        .unwrap_or_else(|| client.public_key().to_hex());
     validate_hex64(&pubkey)?;
     let pubkey = pubkey.to_ascii_lowercase();
     let raw = client
@@ -508,7 +510,7 @@ fn extract_owner_auth_tag(tags: &[serde_json::Value], signer_hex: &str) -> Optio
 /// normalize it to lowercase, so the archived-identities query filter and
 /// the author comparison in [`verify_archived_event`] agree regardless of
 /// the case the relay published `self` in.
-fn normalize_relay_self_hex(self_hex: &str) -> Result<String, CliError> {
+pub(crate) fn normalize_relay_self_hex(self_hex: &str) -> Result<String, CliError> {
     if self_hex.len() != 64 || !self_hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(CliError::Other(format!(
             "relay 'self' field is not a valid 64-hex pubkey: {self_hex}"
@@ -1039,7 +1041,11 @@ mod tests {
 
     fn test_client(base_url: &str) -> crate::client::BuzzClient {
         let keys = nostr::Keys::generate();
-        crate::client::BuzzClient::new(base_url.to_string(), keys, None, None).unwrap()
+        crate::client::BuzzClient::new(
+            base_url.to_string(),
+            crate::credentials::Credentials::from_keys(keys),
+        )
+        .unwrap()
     }
 
     fn kind0_response(signer_hex: &str) -> String {
