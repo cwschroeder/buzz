@@ -407,8 +407,11 @@ pub(crate) async fn admitted_owner(
 pub(crate) const OWNER_LINK_ERROR: &str = "error: internal error recording agent owner";
 
 /// Socket refusal for an owner link that did not land. A different stored
-/// owner is `authorization denied` only for a NIP-FI token owner; for NIP-OA
-/// it stays the link error it has always been.
+/// owner is a deterministic denial: for a NIP-FI token owner it gets the
+/// canonical mismatch reason, for NIP-OA the legacy link error, but both are
+/// `authorization denied` and must not enter the transient reconnect loop.
+/// Only an unwritable link (`Unavailable`, e.g. a DB fault) stays
+/// `authorization unavailable`.
 pub(crate) fn owner_link_denial(
     link: crate::api::relay_members::OwnerLink,
     token_owner: bool,
@@ -423,7 +426,14 @@ pub(crate) fn owner_link_denial(
             class: buzz_auth::DenialClass::AuthorizationDenied,
             owner_reason: Some("not_stored_owner"),
         }),
-        OwnerLink::Conflict | OwnerLink::Unavailable => Some(AdmissionDenial {
+        OwnerLink::Conflict => Some(AdmissionDenial {
+            metric: "agent_owner_link_error",
+            reason: OWNER_LINK_ERROR,
+            outcome: AuthOutcome::RelayMembershipCheckError,
+            class: buzz_auth::DenialClass::AuthorizationDenied,
+            owner_reason: None,
+        }),
+        OwnerLink::Unavailable => Some(AdmissionDenial {
             metric: "agent_owner_link_error",
             reason: OWNER_LINK_ERROR,
             outcome: AuthOutcome::RelayMembershipCheckError,
@@ -1876,6 +1886,62 @@ mod tests {
             );
             harness.assert_off_mode_transient(reason);
         }
+    }
+
+    #[tokio::test]
+    async fn owner_link_conflict_is_terminal_not_transient() {
+        use crate::api::relay_members::OwnerLink;
+
+        let mut harness = AuthHarness::new(false);
+        let attempt =
+            crate::access::AuthAttempt::nip42(&harness.conn, harness.key.public_key(), true);
+        let denial = super::owner_link_denial(OwnerLink::Conflict, false)
+            .expect("a conflicting stored owner denies");
+        assert_eq!(
+            denial.class,
+            buzz_auth::DenialClass::AuthorizationDenied,
+            "a deterministic owner conflict must not look transient"
+        );
+
+        super::deny_admission(&harness.conn, &attempt, "event-id", denial);
+
+        let frame = match harness.ctrl_rx.try_recv().expect("AUTH rejection") {
+            WsMessage::Text(text) => text,
+            other => panic!("expected text frame, got {other:?}"),
+        };
+        let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(frame[0], "OK");
+        assert_eq!(frame[2], false);
+        assert_eq!(frame[3], super::OWNER_LINK_ERROR);
+        assert!(harness.ctrl_rx.try_recv().is_err(), "one frame only");
+        assert!(harness.send_rx.try_recv().is_err(), "no data-channel frame");
+        assert!(harness.terminal_rx.try_recv().is_err(), "no FI frame");
+        assert!(
+            harness.conn.cancel.is_cancelled(),
+            "denial closes the socket"
+        );
+        assert!(matches!(
+            harness.conn.auth_state_snapshot(),
+            AuthState::Failed
+        ));
+    }
+
+    #[tokio::test]
+    async fn owner_link_unavailable_stays_transient() {
+        use crate::api::relay_members::OwnerLink;
+
+        let harness = AuthHarness::new(false);
+        let attempt =
+            crate::access::AuthAttempt::nip42(&harness.conn, harness.key.public_key(), true);
+        let denial = super::owner_link_denial(OwnerLink::Unavailable, false)
+            .expect("an unwritable owner link denies");
+        assert_eq!(
+            denial.class,
+            buzz_auth::DenialClass::AuthorizationUnavailable
+        );
+
+        super::deny_admission(&harness.conn, &attempt, "event-id", denial);
+        harness.assert_off_mode_transient(super::OWNER_LINK_ERROR);
     }
 
     /// Root wire frames for an FI session whose NIP-42 key is not the
