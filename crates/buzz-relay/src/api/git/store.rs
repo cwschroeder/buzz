@@ -1143,8 +1143,9 @@ mod fault_probe {
         /// A non-linearizable backend: a faulted `if_match_race` PUT whose
         /// `If-Match` is already stale is committed anyway before the fault
         /// status goes out. A faulted PUT whose `If-Match` still matches is
-        /// answered without mutating, so rust-s3's retry 1s later is the one
-        /// that lands, after the round's real winner.
+        /// answered with the fault and lands right after the round's real
+        /// winner commits. rust-s3 0.38 no longer replays a failed PUT, so
+        /// the fake lands it itself instead of relying on a client retry.
         if_match_stale_commit: bool,
         inm: InmFault,
     }
@@ -1155,6 +1156,9 @@ mod fault_probe {
         objects: HashMap<String, (Bytes, String)>,
         versions: u64,
         last_inm_put: HashMap<String, Instant>,
+        /// key → body of a faulted racer whose write lands after the next
+        /// commit to that key (see `Faults::if_match_stale_commit`).
+        pending_stale: HashMap<String, Bytes>,
     }
 
     struct Fake {
@@ -1223,15 +1227,22 @@ mod fault_probe {
                         _ => false,
                     };
                     if let Some(code) = self.fault(&key, &body, &mut st) {
-                        if self.faults.if_match_stale_commit && precondition_failed {
-                            Self::commit(&mut st, key, body);
+                        if self.faults.if_match_stale_commit {
+                            if precondition_failed {
+                                Self::commit(&mut st, key, body);
+                            } else {
+                                st.pending_stale.insert(key, body);
+                            }
                         }
                         return status(code);
                     }
                     if precondition_failed {
                         return status(412);
                     }
-                    let etag = Self::commit(&mut st, key, body);
+                    let etag = Self::commit(&mut st, key.clone(), body);
+                    if let Some(stale) = st.pending_stale.remove(&key) {
+                        Self::commit(&mut st, key, stale);
+                    }
                     ([("etag", etag)], "").into_response()
                 }
                 _ => status(405),
