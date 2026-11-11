@@ -181,3 +181,17 @@ ergänzt.
   `pgrep rustc` prüfen.
 - ms2 holt den Fork nur über das Remote `origin` (HTTPS); ein Remote `fork`
   gibt es dort nicht.
+- Nachtrag am Abend (claude): `/private/tmp/buzz-relay.log` rotiert seit
+  11.11. per Kopieren und Kürzen (`com.buzz.relay-logrotate`). Das geht ohne
+  Neustart, weil launchd `StandardOutPath` mit `O_APPEND` öffnet; `lsof +fg`
+  zeigt das als `AP`. `newsyslog` taugt dafür nicht, es benennt die Datei um
+  und der Relay schriebe in die alte weiter.
+- Ein Probestart des Relays aus einer Migrationsprobe lief 33 Stunden weiter,
+  gegen eine längst gelöschte Datenbank und mit Health und Metriken auf allen
+  Schnittstellen. Probeprozesse beim Aufräumen per PID beenden und danach mit
+  `pgrep -fl buzz-relay` prüfen, dass nur der launchd-Dienst übrig ist.
+- Welche Agenten-CLI läuft, nicht aus Erinnerung oder Doku ableiten:
+  Binary-Datum und Hash an den Pfaden prüfen, die Pilot (`PILOT_BUZZ_BIN`),
+  Fabrik-LaunchAgents (`BUZZ_PILOT_BUZZ_BIN`) und Helper (`buzz_bin`)
+  tatsächlich nutzen. Angenommen war der Stand vom 25.10., tatsächlich lief
+  der vom 18.08.

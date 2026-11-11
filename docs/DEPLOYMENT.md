@@ -15,6 +15,15 @@ Dieses Runbook beschreibt den privaten Buzz-Backend-Betrieb auf Mac Studio 2.
 - Öffentliche URL: `https://macstudio-2.taila89eb3.ts.net`
 - Lokale Readiness: `http://127.0.0.1:8088/_readiness`
 - PostgreSQL: Container `buzz-pilot-postgres`, Port `127.0.0.1:55432`
+- Agenten-CLI: `~/Github/buzz-custom/target/release/buzz` auf MacBook und
+  home-1. Diesen Pfad nutzen der Pilot (`PILOT_BUZZ_BIN`), die Fabrik-Dienste
+  auf home-1 (`BUZZ_PILOT_BUZZ_BIN` in ihren LaunchAgents) und der
+  buzz-comms-Helper (`buzz_bin` in `~/.config/buzz-agent/config.json`); auf
+  dem MacBook zeigt `~/.local/bin/buzz` dorthin. Auf home-1 ist
+  `~/Github/buzz-custom` kein Git-Checkout, nur ein Ordner mit Binaries.
+  Aktualisieren erst, wenn das Relay desselben Stands live ist: auf Studio 2
+  `cargo build --release --locked -p buzz-cli` im Arbeitsbaum des Relays, das
+  alte Binary daneben sichern, das neue per Umbenennen einsetzen.
 
 Vor jedem Neustart wird ein PostgreSQL-Custom-Format-Dump erzeugt und mit
 `pg_restore -l` geprüft. Erst danach dürfen die beiden Relay-Dienste neu
@@ -109,12 +118,26 @@ gleich. Auf `f2f76c4fa` (Schema 68) nur über den Dump von 16:45 Uhr in drei
 Durchgängen, wie beim Stand vom 01.11. beschrieben; Schreibvorgänge seit dem
 Dump gehen verloren.
 
-Offener Betriebspunkt (11.11.2026, claude): Das neue Zugriffslog
-`buzz_relay::access` schreibt je Verbindung, Anfrage und HTTP-Aufruf eine
-Zeile. `/private/tmp/buzz-relay.log` wächst seitdem etwa doppelt so schnell,
-rund 6 statt 3 MB pro Stunde, und wird nicht rotiert. Abhilfe wäre
-`buzz_relay::access=warn` in `RUST_LOG` oder eine Logrotation; beides ist
-noch nicht umgesetzt.
+Logrotation (seit 11.11.2026, claude): Das Zugriffslog `buzz_relay::access`
+schreibt je Verbindung, Anfrage und HTTP-Aufruf eine Zeile;
+`/private/tmp/buzz-relay.log` wächst seitdem etwa doppelt so schnell, im
+Mittel rund 6 statt 3 MB pro Stunde. `RUST_LOG` bleibt unverändert, damit die
+Zugriffszeilen für die Diagnose erhalten bleiben. Stattdessen rotiert der
+LaunchAgent `com.buzz.relay-logrotate` stündlich:
+
+- Skript `~/.local/bin/buzz-relay-logrotate`, Quelle und plist liegen unter
+  [`tasks/backend-upstream-20261111/`](../tasks/backend-upstream-20261111/).
+- Ab 100 MB wird das Log kopiert, gekürzt und als
+  `~/Library/Logs/buzz-relay/buzz-relay-<Zeit>.log.gz` aufbewahrt, die
+  neuesten 10 Generationen bleiben. Ebenso `/private/tmp/buzz-pair-relay.log`.
+- Kein Neustart nötig: launchd hält beide Logs mit `O_APPEND` offen
+  (`lsof +fg` zeigt `AP`), der Relay schreibt nach dem Kürzen am neuen Ende
+  weiter. Erste Rotation am 11.11. um 19:04 Uhr: 113,7 MB zu 2,3 MB, die
+  Nahtstelle ohne Lücke.
+- Grenze und Zahl der Generationen lassen sich mit `BUZZ_LOG_ROTATE_MAX_BYTES`
+  und `BUZZ_LOG_ROTATE_KEEP` unter `EnvironmentVariables` im plist ändern;
+  abschalten mit
+  `launchctl bootout gui/$(id -u)/com.buzz.relay-logrotate`.
 
 ## Historischer Stand vom 01.11.2026
 

@@ -104,8 +104,7 @@ Mit den nächsten Mobile-Releases (Desktop 1.0 kommt aus `block/buzz-app`):
 - Volltext in iOS-Benachrichtigungen braucht Push; `BUZZ_PUSH_ENABLED` ist
   standardmäßig aus.
 
-Neue CLI (`buzz`), noch nicht an die Agenten verteilt (die nutzen den Stand
-`677a282a4` vom 25.10.):
+Neue CLI (`buzz`), am Abend an die Agenten verteilt (siehe Nachtrag unten):
 
 - `messages send --from-thread`, Bearbeiten behält Anhänge
   (`--clear-attachments` zum Entfernen), Upload beliebiger Dateitypen,
@@ -113,10 +112,49 @@ Neue CLI (`buzz`), noch nicht an die Agenten verteilt (die nutzen den Stand
 - Reihenfolge Relay vor CLI ist jetzt erfüllt. Die alte CLI entfernt beim
   Bearbeiten weiter die Anhänge.
 
+## Nachtrag 11.11. abends: CLI und Logrotation
+
+Christian hat beide Punkte aus den Empfehlungen beauftragt („ja, mach 2 und 3“).
+
+CLI:
+
+- Gebaut auf Studio 2 aus `ae7f9c0a2`, demselben Stand wie das Relay
+  (`cargo build --release --locked -p buzz-cli`), SHA-256
+  `28d8b29bf0381dc4…`.
+- Ersetzt auf MacBook und home-1 `~/Github/buzz-custom/target/release/buzz`.
+  Das war der Stand vom 18.08. (SHA-256 `b60333214687…`), nicht wie oben
+  zuerst angenommen der vom 25.10.; er liegt als `buzz.20260818-b6033321`
+  daneben. Auf dem MacBook zeigt `~/.local/bin/buzz` jetzt auf denselben Pfad,
+  vorher auf die CLI im Desktop-Bundle vom 01.11. Der Checkout
+  `buzz-custom` steht per Fast-Forward auf `ae7f9c0a2`.
+- Verträglichkeit geprüft:
+  - Für alle Befehle, die Pilot und Helper aufrufen, fällt kein Flag weg.
+  - `messages get` und `messages thread` liefern dieselben Events,
+    zusätzlich das Feld `sig`; `channels get`, `channels members` und
+    `channels list` liefern inhaltlich dasselbe.
+  - Pilot und Helper werten nur „Exit-Code ungleich 0“ aus.
+  - Der Preflight-Check auf `--mention` besteht.
+- Im Betrieb: Fortschrittsmeldung über den Pilot auf dem MacBook gesendet und
+  mit Umlauten und Tags zurückgelesen; auf home-1 lesen beide Pilot-Wege und
+  der Helper.
+- Der Helper-`doctor` auf home-1 meldet für maas-ng und netzcockpit
+  „channel not visible to this agent“. Mit der alten CLI kommt dasselbe, der
+  Befund ist also älter als das Update.
+
+Logrotation: siehe `docs/DEPLOYMENT.md`, Abschnitt Logrotation. Skript
+[`buzz-relay-logrotate`](buzz-relay-logrotate) und
+[`com.buzz.relay-logrotate.plist`](com.buzz.relay-logrotate.plist) liegen
+hier. Vorab lokal geprüft: Ein Schreiber mit `O_APPEND` verlor über vier
+Rotationen in zwei Sekunden keine seiner 600 Zeilen, das Kürzen hinterlässt
+keine Nullbytes, alte Generationen werden gelöscht.
+
+Nebenbefund: Der Probestart des Relays aus der Migrationsprobe vom 10.11.
+lief noch (PID 26533, seit 10.11. 09:22), gegen die längst entfernte
+Probe-Datenbank und mit Health und Metriken auf `*:18088` und `*:19202`.
+Beendet, Produktion unberührt.
+
 ## Offen
 
-- CLI-Stand für die Agenten aktualisieren.
-- Logvolumen des Zugriffslogs begrenzen (`RUST_LOG` oder Rotation).
 - Events aus `events_p_future` in Monatspartitionen umverteilen
   (Operator-Schritt mit Backup, seit 01.11. offen).
 - Entscheiden, ob Standardkanäle (`--auto-join`) und

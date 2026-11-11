@@ -66,3 +66,5 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 | erledigt | Upstream ab `a56966b77` (#8522, Live-Sync für Artefakte) und `d6196a16c` übernehmen (offen seit 01.11.) | in PR #8 enthalten |
 | offen | Neue CLI an die Agenten verteilen (Stand dort `677a282a4`) | `backend-upstream-20261111/README.md` |
 | offen | Logvolumen des Zugriffslogs `buzz_relay::access` begrenzen | `docs/DEPLOYMENT.md`, offener Betriebspunkt |
+| erledigt | Neue CLI an die Agenten verteilt (MacBook und home-1, Stand `ae7f9c0a2`; vorher 18.08., nicht `677a282a4`) | `backend-upstream-20261111/README.md`, Nachtrag |
+| erledigt | Zugriffslog begrenzt: stündliche Logrotation `com.buzz.relay-logrotate` auf Studio 2 | `docs/DEPLOYMENT.md`, Logrotation |
