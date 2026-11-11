@@ -9,6 +9,8 @@ set -euo pipefail
 
 MAX_BYTES="${BUZZ_LOG_ROTATE_MAX_BYTES:-104857600}"
 KEEP="${BUZZ_LOG_ROTATE_KEEP:-10}"
+# Mindestens eine Generation behalten, sonst löscht KEEP=0 das frische Archiv.
+[ "$KEEP" -ge 1 ] 2>/dev/null || KEEP=1
 DEST="${BUZZ_LOG_ROTATE_DIR:-$HOME/Library/Logs/buzz-relay}"
 
 mkdir -p "$DEST"

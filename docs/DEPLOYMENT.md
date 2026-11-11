@@ -76,8 +76,9 @@ Session.
   (seit dem ersten Deployment unverändert).
 - PIDs: Relay `57311` seit dem Neustart um 19:22 Uhr (davor `41590`),
   Pair-Relay `88961`.
-- Datenstand: 43.778 Events, 137 Kanäle, 16 Mitglieder, vor und nach dem
-  Neustart gleich.
+- Datenstand: beim zweiten Deployment 18:24 Uhr 43.778 Events, 137 Kanäle,
+  16 Mitglieder, vor und nach dem Neustart gleich; beim Media-Neustart
+  19:22 Uhr 43.810 Events, 137 Kanäle, 16 Mitglieder.
 - Einzelheiten, Tests und neue Funktionen:
   [Aufgabenbericht](../tasks/backend-upstream-20261111/README.md).
 

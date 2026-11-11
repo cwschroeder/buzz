@@ -78,9 +78,15 @@ Ohne Zutun aktiv:
   Workflow-Owner.
 - Für Buzz 1.0: Artefakt-Sync (`artifacts.sync`, `artifacts.incremental`,
   im NIP-11 sichtbar), eigene Emoji (kind 30180).
-- Entfallen: die Metriken `buzz_total_*` und `buzz_community_*` (Commit-Text);
-  die Variablen `BUZZ_REDIS_POOL_SIZE` und `BUZZ_USAGE_METRICS_*` werden
-  ignoriert.
+- Entfallen sind die DB-abgeleiteten Messreihen `buzz_total_users/channels/relay_members/...`
+  und die DB-abgeleiteten `buzz_community_*`-Gauges (Commit-Text). Weiter
+  vorhanden sind unter anderem `buzz_total_storage_bytes`,
+  `buzz_total_storage_objects`, `buzz_total_subscriptions`,
+  `buzz_total_users_online_pod`, `buzz_total_ws_connections` und die
+  `buzz_community_*_total`-Zähler. Ignoriert werden
+  `BUZZ_USAGE_METRICS_PER_COMMUNITY`, `BUZZ_USAGE_METRICS_REPLICA_MAX_AGE_MS`
+  und `BUZZ_REDIS_POOL_SIZE`; `BUZZ_USAGE_METRICS_INTERVAL_SECS` und
+  `BUZZ_USAGE_METRICS_IDLE_TIMEOUT_SECS` gelten weiter.
 
 Abschaltbar, derzeit aus:
 
