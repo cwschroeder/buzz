@@ -72,7 +72,7 @@ Session.
 
 Erstes Deployment, 16:45 Uhr: `04498c17001dc6c0828ba26fbe7a2b6a6f7e017a`
 (PR #8, Upstream `44b3c4823` vom 09.11.), Migrationen 69 bis 86 beim Start in
-unter einer Sekunde. Relay SHA-256
+112 ms (Startphase `db_migrate` im Relay-Log). Relay SHA-256
 `7a033106dbc84b281f8bba66f60ad1c55542f7b8feaee87e61ce53aee31bb610`, Build-ID
 `backend-20261110-studio2`. NIP-11 behält alle bisherigen Felder; neu sind
 unter anderem `buzz-unlisted-channels`, `artifacts.sync.*`,

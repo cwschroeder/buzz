@@ -45,33 +45,41 @@ im Kanal `buzz`, Start
   voller Pubsub-Queue). Merge `ae7f9c0a2` hat denselben Baum wie der geprüfte
   Head.
 - GitHub-CI auf dem Fork: Rust, Postgres, Relay-E2E, Mobile und Desktop
-  macOS grün. Desktop-Tauri (apt-Archive) und Desktop-Smoke/E2E
-  (Playwright-Chromium-Installation) scheiterten; laut Repo-Agent
-  umgebungsbedingt, PR #9 ändert nichts am Desktop.
+  macOS grün. Desktop-Tauri und Desktop-Smoke/E2E scheiterten in der
+  Einrichtung, bevor Code lief: `apt-get update` lief dreimal gegen den
+  Azure-Spiegel ins Timeout, und Playwright unterstützt Chromium auf dem
+  Runner-Image Ubuntu 26.04 nicht. Der Playwright-Schritt scheiterte schon bei
+  PR #8 auf. PR #9 ändert nichts am Desktop.
 
 ## Was der neue Stand bringt
 
-Aus dem Upstream-Quelltext (Bereich `9e8c9fc04..95dd9d67d`) gelesen. Im
-Betrieb beobachtet sind nur die NIP-11-Felder, das Zugriffslog und die
+Bereich `9e8c9fc04..95dd9d67d`, ohne Markierung im Upstream-Code gelesen.
+„(Commit-Text)“ heißt: nur aus der Commit-Nachricht, nicht im Code geprüft.
+Im Betrieb beobachtet sind nur die NIP-11-Felder, das Zugriffslog und die
 Media-Prüfung; der Rest ist nicht erprobt.
 
 Ohne Zutun aktiv:
 
-- Datenbank: Eine hängende Verbindung wird nach 5 s
-  freigegeben, Verbindungen werden alle 5 Minuten erneuert. Bei
-  Datenbankfehlern antwortet das Relay mit CLOSED statt mit einem falschen
-  EOSE. Der Fork-Schutz bleibt nötig, weil Upstream außerhalb von NIP-FI
-  weiter `OK false` schickt.
+- Datenbank: Der SQLx-Pin begrenzt die Rückgabe einer Verbindung an den Pool
+  auf 5 s (`Cargo.toml`, Kommentar zu sqlx PR 4407), Verbindungen leben
+  höchstens 300 s (`crates/buzz-db/src/runtime/mod.rs`). Eine Suche endet
+  bei Datenbankfehlern mit CLOSED `error: database error` statt mit EOSE;
+  für History-Reads gilt das laut #8692 ebenso (Commit-Text). Der
+  Fork-Schutz bleibt nötig, weil Upstream außerhalb von NIP-FI weiter
+  `OK false` schickt (`handlers/auth.rs`).
 - Zugriffslog `buzz_relay::access` mit `close_reason` je Verbindung (siehe
   offener Betriebspunkt zum Logvolumen in `docs/DEPLOYMENT.md`).
-- Media mit `Cache-Control: private, no-store`, WebP-Vorschaubilder.
-- Kanalfunktionen: Mitgliedschaftshinweise, bis zu 100 Personen je
-  kind:9000, eindeutige Namen für gelistete Kanäle, Einladungen gesperrter
-  Aussteller werden ungültig, Prüfung der Workflow-Owner.
-- Für Buzz 1.0: Artefakt-Sync (`artifacts.sync`, `artifacts.incremental`),
-  eigene Emoji (kind 30180).
-- Entfallen: die Metriken `buzz_total_*` und `buzz_community_*`; die
-  Variablen `BUZZ_REDIS_POOL_SIZE` und `BUZZ_USAGE_METRICS_*` werden
+- Media mit `Cache-Control: private, no-store`; WebP-Vorschaubilder, die bei
+  Bedarf neu erzeugt werden (Commit-Text).
+- Einladungen gesperrter Aussteller werden beim Einlösen widerrufen.
+- Aus Commit-Texten: Mitgliedschaftshinweise beim Löschen und Moderieren,
+  bis zu 100 Personen je kind:9000 (die CLI nimmt weiter einen Pubkey),
+  eindeutige Namen für gelistete Kanäle (Migration 0083), Prüfung der
+  Workflow-Owner.
+- Für Buzz 1.0: Artefakt-Sync (`artifacts.sync`, `artifacts.incremental`,
+  im NIP-11 sichtbar), eigene Emoji (kind 30180).
+- Entfallen: die Metriken `buzz_total_*` und `buzz_community_*` (Commit-Text);
+  die Variablen `BUZZ_REDIS_POOL_SIZE` und `BUZZ_USAGE_METRICS_*` werden
   ignoriert.
 
 Abschaltbar, derzeit aus:
@@ -83,6 +91,18 @@ Abschaltbar, derzeit aus:
 - Ungelistete Kanäle (`--unlisted`), Nebenläufigkeitsgrenzen über
   `BUZZ_FEATURE_FLAGS_PROVIDER`, `BUZZ_CLIENT_IP_HEADER`, NIP-FI
   (`BUZZ_NIP_FI_MODE`).
+
+Mit den nächsten Mobile-Releases (Desktop 1.0 kommt aus `block/buzz-app`):
+
+- Arbeitende Agenten an der Thread-Wurzel sichtbar; braucht Typing-Events
+  (kind 20002), ob unsere CLI-Agenten sie senden, ist ungeprüft.
+- Leise Agenten-Nachrichten mit `["audience","agents"]` zählen nicht als
+  ungelesen. Unsere CLI kann den Tag nicht setzen; das wäre ein kleiner
+  Patch am Fork.
+- Foto- und Video-Stapel, Markierung „bearbeitet“, gleichnamige Agenten
+  unterscheidbar, Lesestand über Geräte hinweg.
+- Volltext in iOS-Benachrichtigungen braucht Push; `BUZZ_PUSH_ENABLED` ist
+  standardmäßig aus.
 
 Neue CLI (`buzz`), noch nicht an die Agenten verteilt (die nutzen den Stand
 `677a282a4` vom 25.10.):
