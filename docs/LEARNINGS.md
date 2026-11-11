@@ -195,3 +195,11 @@ ergänzt.
   Fabrik-LaunchAgents (`BUZZ_PILOT_BUZZ_BIN`) und Helper (`buzz_bin`)
   tatsächlich nutzen. Angenommen war der Stand vom 25.10., tatsächlich lief
   der vom 18.08.
+- `auto_join` wirkt je nach `BUZZ_REQUIRE_RELAY_MEMBERSHIP` verschieden. Mit
+  Mitgliederliste nur bei neuen Aufnahmen (Einladung, kind:9030); ohne Liste
+  bei jeder Anmeldung für alle Kanäle, in denen jemand nie war, samt
+  Systemmeldungen. Vor dem Setzen die Einstellung prüfen.
+- Im Media-Schattenmodus zählt alles, was im Modus `off` hochgeladen und nie
+  veröffentlicht wurde, als `no_ref`, denn `off` zeichnet keine
+  Upload-Nachweise auf. Ein Anteil `no_ref` direkt nach dem Umschalten ist
+  deshalb erwartbar und kein Fehler.

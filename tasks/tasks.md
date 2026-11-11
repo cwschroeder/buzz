@@ -68,3 +68,6 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 | offen | Logvolumen des Zugriffslogs `buzz_relay::access` begrenzen | `docs/DEPLOYMENT.md`, offener Betriebspunkt |
 | erledigt | Neue CLI an die Agenten verteilt (MacBook und home-1, Stand `ae7f9c0a2`; vorher 18.08., nicht `677a282a4`) | `backend-upstream-20261111/README.md`, Nachtrag |
 | erledigt | Zugriffslog begrenzt: stündliche Logrotation `com.buzz.relay-logrotate` auf Studio 2 | `docs/DEPLOYMENT.md`, Logrotation |
+| erledigt | #general als Standardkanal (`auto_join`), wirkt nur für neue Aufnahmen | `docs/DEPLOYMENT.md`, Standardkanal |
+| erledigt | `BUZZ_MEDIA_READ_MODE=shadow` auf Studio 2 | `docs/DEPLOYMENT.md`, Media-Prüfung |
+| offen | Schattenmetriken auswerten, danach über `enforce` entscheiden | `backend-upstream-20261111/README.md` |

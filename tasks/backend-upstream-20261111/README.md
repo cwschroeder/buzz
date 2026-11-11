@@ -153,9 +153,33 @@ lief noch (PID 26533, seit 10.11. 09:22), gegen die längst entfernte
 Probe-Datenbank und mit Health und Metriken auf `*:18088` und `*:19202`.
 Beendet, Produktion unberührt.
 
+## Nachtrag 11.11. abends: Standardkanal und Media-Schattenmodus
+
+Christian: „mach auch 4 und 5“. Einzelheiten und Rückweg in
+`docs/DEPLOYMENT.md`, Abschnitte Standardkanal und Media-Prüfung.
+
+- #general hat `auto_join=true`. Gesetzt per kind:9002 mit der menschlichen
+  Pilot-Identität (`2e392aee…`, der einzige Owner des Relays). Das Relay hat
+  die Kanal-Metadaten (kind:39000) mit dem Tag `auto_join` neu veröffentlicht
+  und in #general die Systemmeldung `auto_join_changed` gepostet.
+- Mit Mitgliederliste (`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) gilt das nur für
+  künftige Aufnahmen; alle 16 Mitglieder sind ohnehin in #general. Ein echter
+  Neueintritt ist nicht erprobt, um im Produktivkanal kein Testmitglied
+  anzulegen. Upstream testet den Pfad mit Postgres-Tests im Relay
+  (`group_state_postgres_tests`, `invites/postgres_tests/recovery_postgres_tests`).
+- `BUZZ_MEDIA_READ_MODE=shadow` seit 19:22 Uhr, Relay nach 2 s bereit,
+  Zahlen gleich (43.810 Events, 137 Kanäle, 16 Mitglieder), 4 von 4
+  NIP-42-Anmeldungen erfolgreich, 4 Verbindungen wie vorher.
+- Geprüft:
+  - Ein vorhandenes, nie veröffentlichtes Testbild zählt als `no_ref` und
+    wird trotzdem ausgeliefert.
+  - Ein neu hochgeladenes Bild legt einen Upload-Nachweis an
+    (`media_uploaders=1`) und zählt als `allow`.
+
 ## Offen
 
 - Events aus `events_p_future` in Monatspartitionen umverteilen
   (Operator-Schritt mit Backup, seit 01.11. offen).
-- Entscheiden, ob Standardkanäle (`--auto-join`) und
-  `BUZZ_MEDIA_READ_MODE=shadow` eingeschaltet werden.
+- Metriken des Schattenmodus einige Tage auswerten, dann über `enforce`
+  entscheiden; die Editor-Blocker in `block/buzz-app` und Mobile bleiben
+  davor zu lösen.

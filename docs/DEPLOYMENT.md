@@ -139,6 +139,47 @@ LaunchAgent `com.buzz.relay-logrotate` stündlich:
   abschalten mit
   `launchctl bootout gui/$(id -u)/com.buzz.relay-logrotate`.
 
+Standardkanal (seit 11.11.2026, claude): #general
+(`81e436aa-9e83-593a-af1e-7d934540f48c`) hat `auto_join=true`, gesetzt mit
+der menschlichen Pilot-Identität, die der Relay-Owner ist:
+`buzz channels update --channel <id> --auto-join true` (kind:9002). Owner oder
+Admin des Relays dürfen das, nur für offene, nicht archivierte Stream-Kanäle.
+Weil das Relay mit `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` läuft, treten nur neu
+aufgenommene Mitglieder bei (Einladung einlösen oder kind:9030); bestehende
+Mitglieder bleiben unberührt, `buzz-admin add-member` löst keinen Beitritt
+aus. Zurück mit `--auto-join false`.
+
+Media-Prüfung im Schattenmodus (seit 11.11.2026 19:22 Uhr, claude):
+`BUZZ_MEDIA_READ_MODE=shadow` in
+`~/Library/Application Support/Buzz Pilot/relay.env` auf Studio 2. Das Relay
+prüft jeden Medienabruf und jede Veröffentlichung mit Anhängen gegen die
+Kanalmitgliedschaft, sperrt aber nichts (im Code jeder Fehlerpfad `Ok`,
+`crates/buzz-relay/src/api/media_access.rs`). Ab jetzt zeichnet es
+Upload-Nachweise in `media_uploaders` auf, die `enforce` braucht.
+
+- Beobachten:
+  - `buzz_media_read_access_total{mode="shadow",reason=...}` mit `allow`,
+    `no_ref`, `not_member`, `lookup_error` und `capacity`;
+  - dazu `buzz_media_publication_access_total` auf `127.0.0.1:9202/metrics`.
+- Erster Stand nach dem Start: Ein vor dem Umschalten hochgeladenes, nie
+  verwendetes Bild zählt als `no_ref`, ein neu hochgeladenes als `allow`;
+  beide wurden ausgeliefert.
+- Voraussetzung war der gültige Index `idx_events_media_edit_target` aus
+  Migration 0086, an allen 8 Event-Partitionen angehängt.
+- Dump vor dem Neustart und die vorherige `relay.env` liegen in
+  `backups/media-shadow-20261111` (Dump SHA-256 `9ec0f075aead…`, 805 Zeilen).
+- Zurück: die Zeile aus `relay.env` entfernen und `com.buzz.relay` neu
+  starten.
+- Vor `enforce` laut `docs/operator-private-media.md`:
+  - Alle Bearbeitungswerkzeuge müssen die Anhänge erhalten. Der Mobile-Editor,
+    der Editor der App-Oberfläche und der MCP von `block/buzz-app` tun es noch
+    nicht.
+  - Medien, die vor `shadow` hochgeladen und nie veröffentlicht wurden,
+    brauchen einen neuen Upload.
+  - Jeder Agent braucht eigene Upload-Nachweise für seine Avatare.
+  - `no_ref`, `not_member` und `lookup_error` vorher über einige Tage
+    auswerten.
+
 ## Historischer Stand vom 01.11.2026
 
 Deployment vom 01.11.2026 (claude, Freigabe durch Christian am selben Tag):
