@@ -64,8 +64,8 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 |---|---|---|
 | erledigt | PR #8 (`04498c170`, Upstream `44b3c4823`, Schema 68 auf 86) und PR #9 (`ae7f9c0a2`, Upstream `95dd9d67d`) als Relay auf Mac Studio 2 ausgerollt | [Prüfung und Nachweise](backend-upstream-20261111/README.md) |
 | erledigt | Upstream ab `a56966b77` (#8522, Live-Sync für Artefakte) und `d6196a16c` übernehmen (offen seit 01.11.) | in PR #8 enthalten |
-| offen | Neue CLI an die Agenten verteilen (Stand dort `677a282a4`) | `backend-upstream-20261111/README.md` |
-| offen | Logvolumen des Zugriffslogs `buzz_relay::access` begrenzen | `docs/DEPLOYMENT.md`, offener Betriebspunkt |
+| überholt | Neue CLI an die Agenten verteilen (Stand dort `677a282a4`) | am Abend verteilt; tatsächlich vorher 18.08., siehe erledigten Eintrag unten |
+| überholt | Logvolumen des Zugriffslogs `buzz_relay::access` begrenzen | erledigt durch stündliche Logrotation, siehe erledigten Eintrag unten |
 | erledigt | Neue CLI an die Agenten verteilt (MacBook und home-1, Stand `ae7f9c0a2`; vorher 18.08., nicht `677a282a4`) | `backend-upstream-20261111/README.md`, Nachtrag |
 | erledigt | Zugriffslog begrenzt: stündliche Logrotation `com.buzz.relay-logrotate` auf Studio 2 | `docs/DEPLOYMENT.md`, Logrotation |
 | erledigt | #general als Standardkanal (`auto_join`), wirkt nur für neue Aufnahmen | `docs/DEPLOYMENT.md`, Standardkanal |
