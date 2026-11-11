@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Rotiert die Relay-Logs auf Studio 2 per Kopieren und Kürzen.
+# launchd öffnet StandardOutPath mit O_APPEND (lsof +fg zeigt AP). Nach dem
+# Kürzen schreibt der Relay deshalb am neuen Dateiende weiter, ein Neustart
+# ist nicht nötig. Zeilen, die zwischen Kopie und Kürzen ankommen, gehen
+# verloren (Millisekunden).
+# Aufruf: buzz-relay-logrotate <logdatei>...   (launchd: com.buzz.relay-logrotate)
+set -euo pipefail
+
+MAX_BYTES="${BUZZ_LOG_ROTATE_MAX_BYTES:-104857600}"
+KEEP="${BUZZ_LOG_ROTATE_KEEP:-10}"
+# Mindestens eine Generation behalten, sonst löscht KEEP=0 das frische Archiv.
+[ "$KEEP" -ge 1 ] 2>/dev/null || KEEP=1
+DEST="${BUZZ_LOG_ROTATE_DIR:-$HOME/Library/Logs/buzz-relay}"
+
+mkdir -p "$DEST"
+for f in "$@"; do
+  [ -f "$f" ] || continue
+  size=$(stat -f %z "$f")
+  [ "$size" -ge "$MAX_BYTES" ] || continue
+  base=$(basename "$f" .log)
+  stamp=$(date +%Y%m%d-%H%M%S)
+  out="$DEST/$base-$stamp.log"
+  n=1
+  while [ -e "$out" ] || [ -e "$out.gz" ]; do
+    out="$DEST/$base-$stamp-$n.log"
+    n=$((n + 1))
+  done
+  cp -p "$f" "$out"
+  : > "$f"
+  gzip -9 "$out"
+  ls -1t "$DEST/$base-"*.log.gz | tail -n +"$((KEEP + 1))" | while IFS= read -r old; do
+    rm -f "$old"
+  done
+  echo "$(date -u +%FT%TZ) $f mit $size Bytes nach $out.gz rotiert"
+done

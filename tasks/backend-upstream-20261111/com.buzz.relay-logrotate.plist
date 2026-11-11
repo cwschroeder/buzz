@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.buzz.relay-logrotate</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/cschroeder/.local/bin/buzz-relay-logrotate</string>
+		<string>/private/tmp/buzz-relay.log</string>
+		<string>/private/tmp/buzz-pair-relay.log</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/cschroeder/Library/Logs/buzz-relay/rotate.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/cschroeder/Library/Logs/buzz-relay/rotate.log</string>
+</dict>
+</plist>

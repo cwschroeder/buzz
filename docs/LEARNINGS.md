@@ -159,3 +159,47 @@ ergänzt.
   Operator-Listener, Workflows und Push-Leases in der Kopie.
 - Ab Migration 0058 gibt es keinen Rückweg per Binärtausch mehr, nur über den
   Dump. Den Dump deshalb als letzten Schritt direkt vor dem Neustart ziehen.
+
+## 2026-11-11: Relay-Update auf Upstream vom 11.11. (claude)
+
+- Der Repo-Agent der Fabrik prüft und merged Fork-PRs, darf aber nicht
+  deployen. Sein Ergebnis lautet dann „Nicht live“; den Rollout macht die
+  interaktive Session mit Christians Freigabe.
+- Ein anonymer Media-GET auf `/media/<sha256>` gibt 401, weil Blossom eine
+  Anmeldung verlangt. Prüfen mit `buzz media get` und der Repo-Identität,
+  dann den Hash vergleichen.
+- Studio 2 hat Homebrew-Rust 1.99.1 vorn im `PATH`. Ohne
+  `. ./bin/activate-hermit` baut und testet der falsche Compiler; Skripte
+  prüfen deshalb `cargo --version` auf 1.98.1.
+- Das Zugriffslog `buzz_relay::access` (neu mit PR #8)
+  verdoppelt das Logvolumen. `/private/tmp/buzz-relay.log` wird nicht rotiert.
+- Ein PR ohne Änderungen am Pair-Relay ergibt ein byte-gleiches
+  `buzz-pair-relay`. Mit `cmp` gegen das laufende Binary prüfen und den
+  Neustart dann auslassen.
+- Wird ein `cargo build` per `pkill` abgebrochen, laufen seine `rustc`-Kinder
+  weiter und schreiben ins gleiche `target/`. Vor dem nächsten Build
+  `pgrep rustc` prüfen.
+- ms2 holt den Fork nur über das Remote `origin` (HTTPS); ein Remote `fork`
+  gibt es dort nicht.
+- Nachtrag am Abend (claude): `/private/tmp/buzz-relay.log` rotiert seit
+  11.11. per Kopieren und Kürzen (`com.buzz.relay-logrotate`). Das geht ohne
+  Neustart, weil launchd `StandardOutPath` mit `O_APPEND` öffnet; `lsof +fg`
+  zeigt das als `AP`. `newsyslog` taugt dafür nicht, es benennt die Datei um
+  und der Relay schriebe in die alte weiter.
+- Ein Probestart des Relays aus einer Migrationsprobe lief 33 Stunden weiter,
+  gegen eine längst gelöschte Datenbank und mit Health und Metriken auf allen
+  Schnittstellen. Probeprozesse beim Aufräumen per PID beenden und danach mit
+  `pgrep -fl buzz-relay` prüfen, dass nur der launchd-Dienst übrig ist.
+- Welche Agenten-CLI läuft, nicht aus Erinnerung oder Doku ableiten:
+  Binary-Datum und Hash an den Pfaden prüfen, die Pilot (`PILOT_BUZZ_BIN`),
+  Fabrik-LaunchAgents (`BUZZ_PILOT_BUZZ_BIN`) und Helper (`buzz_bin`)
+  tatsächlich nutzen. Angenommen war der Stand vom 25.10., tatsächlich lief
+  der vom 18.08.
+- `auto_join` wirkt je nach `BUZZ_REQUIRE_RELAY_MEMBERSHIP` verschieden. Mit
+  Mitgliederliste nur bei neuen Aufnahmen (Einladung, kind:9030); ohne Liste
+  bei jeder Anmeldung für alle Kanäle, in denen jemand nie war, samt
+  Systemmeldungen. Vor dem Setzen die Einstellung prüfen.
+- Im Media-Schattenmodus zählt alles, was im Modus `off` hochgeladen und nie
+  veröffentlicht wurde, als `no_ref`, denn `off` zeichnet keine
+  Upload-Nachweise auf. Ein Anteil `no_ref` direkt nach dem Umschalten ist
+  deshalb erwartbar und kein Fehler.

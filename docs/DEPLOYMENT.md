@@ -7,12 +7,23 @@ Dieses Runbook beschreibt den privaten Buzz-Backend-Betrieb auf Mac Studio 2.
 - Checkout: `/Users/cschroeder/Github/buzz`, Branch `customizing/cschroeder`
 - Build aus isoliertem Git-Arbeitsbaum mit separatem `CARGO_TARGET_DIR`:
   `BUZZ_SOURCE_SHA=$(git rev-parse HEAD) BUZZ_BUILD_ID=backend-<JJJJMMTT>-studio2 BUZZ_BUILD_URL=https://github.com/cwschroeder/buzz/commit/$(git rev-parse HEAD) cargo build --release --locked -p buzz-relay -p buzz-pair-relay`
+- Toolchain: vorher `. ./bin/activate-hermit`, damit Hermit-Rust 1.98.1 baut.
+  Das Homebrew-Rust 1.99.1 auf Studio 2 steht sonst vorn im `PATH`.
 - Eingebauten Quellcommit und Abhängigkeiten am lokalen Health-Listener
   `http://127.0.0.1:8088/_status` prüfen; Readiness allein belegt diese nicht.
 - Dienste: `com.buzz.relay` und `com.buzz.pair-relay`
 - Öffentliche URL: `https://macstudio-2.taila89eb3.ts.net`
 - Lokale Readiness: `http://127.0.0.1:8088/_readiness`
 - PostgreSQL: Container `buzz-pilot-postgres`, Port `127.0.0.1:55432`
+- Agenten-CLI: `~/Github/buzz-custom/target/release/buzz` auf MacBook und
+  home-1. Diesen Pfad nutzen der Pilot (`PILOT_BUZZ_BIN`), die Fabrik-Dienste
+  auf home-1 (`BUZZ_PILOT_BUZZ_BIN` in ihren LaunchAgents) und der
+  buzz-comms-Helper (`buzz_bin` in `~/.config/buzz-agent/config.json`); auf
+  dem MacBook zeigt `~/.local/bin/buzz` dorthin. Auf home-1 ist
+  `~/Github/buzz-custom` kein Git-Checkout, nur ein Ordner mit Binaries.
+  Aktualisieren erst, wenn das Relay desselben Stands live ist: auf Studio 2
+  `cargo build --release --locked -p buzz-cli` im Arbeitsbaum des Relays, das
+  alte Binary daneben sichern, das neue per Umbenennen einsetzen.
 
 Vor jedem Neustart wird ein PostgreSQL-Custom-Format-Dump erzeugt und mit
 `pg_restore -l` geprüft. Erst danach dürfen die beiden Relay-Dienste neu
@@ -50,6 +61,140 @@ bleibt true. Die Umverteilung in Monatspartitionen ist ein eigener
 Operator-Schritt mit Backup.
 
 ## Aktiver Stand
+
+Zwei Deployments am 11.11.2026, dazu ein dritter Neustart nur für die
+Media-Einstellung um 19:22 Uhr (claude, Freigabe durch Christian am 10.11.
+„Nach Merge deployen“ und am 11.11. „dann updaten“). Den Merge macht der
+Repo-Agent der Fabrik, ausrollen darf er nicht; das übernimmt die interaktive
+Session.
+
+- Laufzeit-Code: `ae7f9c0a2d2ba8587367104c31eed2a7e4d3fe5e`, Merge von PR #9.
+  Enthaltener Upstream: `95dd9d67d` (block/buzz vom 11.11.).
+- Build-ID `backend-20261111-studio2`, Schema 86.
+- Relay SHA-256: `05f8a05523af8e980e2cc2870a732df04285593abfffb6680c1f0570fc95aa2c`.
+- Pair-Relay SHA-256: `9dc1b281271f8690d14056081a9a421f74bece377cc031f42342fda25b7d9b1e`
+  (seit dem ersten Deployment unverändert).
+- PIDs: Relay `57311` seit dem Neustart um 19:22 Uhr (davor `41590`),
+  Pair-Relay `88961`.
+- Datenstand: beim zweiten Deployment 18:24 Uhr 43.778 Events, 137 Kanäle,
+  16 Mitglieder, vor und nach dem Neustart gleich; beim Media-Neustart
+  19:22 Uhr 43.810 Events, 137 Kanäle, 16 Mitglieder.
+- Einzelheiten, Tests und neue Funktionen:
+  [Aufgabenbericht](../tasks/backend-upstream-20261111/README.md).
+
+Erstes Deployment, 16:45 Uhr: `04498c17001dc6c0828ba26fbe7a2b6a6f7e017a`
+(PR #8, Upstream `44b3c4823` vom 09.11.), Migrationen 69 bis 86 beim Start in
+112 ms (Startphase `db_migrate` im Relay-Log). Relay SHA-256
+`7a033106dbc84b281f8bba66f60ad1c55542f7b8feaee87e61ce53aee31bb610`, Build-ID
+`backend-20261110-studio2`. NIP-11 behält alle bisherigen Felder; neu sind
+unter anderem `buzz-unlisted-channels`, `artifacts.sync.*`,
+`artifacts.incremental.*` und `websocket_query_extensions`.
+
+Zweites Deployment, 18:24 Uhr: `ae7f9c0a2` (PR #9, 14 weitere
+Upstream-Commits vom 10. und 11.11.), ohne Migrationen. Nur das Relay-Binary
+getauscht und neu gestartet, nach 3 s `ready`. NIP-11 unverändert gegenüber
+dem ersten Deployment.
+
+Nachweise nach beiden Neustarts: öffentliche Readiness `ready`, `_status` mit
+Build-ID und Quellcommit wie oben, alle NIP-42-Anmeldungen erfolgreich und die
+WebSocket-Verbindungen wieder auf dem Stand davor. Authentifiziertes Lesen im
+Kanal `buzz` und `buzz media get` eines Testbilds mit gleichem Hash. Ein
+anonymer Media-GET gibt 401, weil Blossom eine Anmeldung verlangt. Im
+Log nur der bekannte `Failed to ensure partitions` (siehe offener
+Betriebspunkt oben).
+
+Backups auf Studio 2 unter `~/Library/Application Support/Buzz Pilot/backups/`:
+
+- `backend-20261111-schema86`: Dump vor den Migrationen
+  `buzz-before-update-20261111-164521.dump`, SHA-256
+  `bbc7dcfb0ab3afd500fc12770c60ca35ae484329a4e299a9d5c12dda9bd4ed5d`,
+  `pg_restore -l` mit 755 Zeilen; alte Binaries `buzz-relay-f2f76c4fa` und
+  `buzz-pair-relay-f2f76c4fa`; NIP-11 und `_status` davor.
+- `backend-20261111-ae7f9c0`: Dump `buzz-before-update-20261111-182442.dump`,
+  SHA-256 `f8c9108d4894461e1aab841ef1c84c7017b93571866a93e444310fbd38f16b8d`,
+  805 Zeilen. Gegenüber dem Dump von 16:45 Uhr kamen 50 Einträge hinzu
+  (Tabellen, Indizes und Constraints der Migrationen 69 bis 86), keiner
+  fehlt. Binaries `buzz-relay-04498c170` und `buzz-pair-relay-04498c170`.
+
+Rückweg: Auf `04498c170` reicht der Tausch des Relay-Binarys, das Schema ist
+gleich. Auf `f2f76c4fa` (Schema 68) nur über den Dump von 16:45 Uhr in drei
+Durchgängen, wie beim Stand vom 01.11. beschrieben; Schreibvorgänge seit dem
+Dump gehen verloren.
+
+Logrotation (seit 11.11.2026, claude): Das Zugriffslog `buzz_relay::access`
+schreibt je Verbindung, Anfrage und HTTP-Aufruf eine Zeile;
+`/private/tmp/buzz-relay.log` wächst seitdem etwa doppelt so schnell, im
+Mittel rund 6 statt 3 MB pro Stunde. `RUST_LOG` bleibt unverändert, damit die
+Zugriffszeilen für die Diagnose erhalten bleiben. Stattdessen rotiert der
+LaunchAgent `com.buzz.relay-logrotate` stündlich:
+
+- Skript `~/.local/bin/buzz-relay-logrotate`, Quelle und plist liegen unter
+  [`tasks/backend-upstream-20261111/`](../tasks/backend-upstream-20261111/).
+- Ab 100 MB wird das Log kopiert, gekürzt und als
+  `~/Library/Logs/buzz-relay/buzz-relay-<Zeit>.log.gz` aufbewahrt, die
+  neuesten 10 Generationen bleiben. Ebenso `/private/tmp/buzz-pair-relay.log`.
+- Kein Neustart nötig: launchd hält beide Logs mit `O_APPEND` offen
+  (`lsof +fg` zeigt `AP`), der Relay schreibt nach dem Kürzen am neuen Ende
+  weiter. Erste Rotation am 11.11. um 19:04 Uhr: 113,7 MB zu 2,3 MB, die
+  Nahtstelle ohne Lücke.
+- Grenze und Zahl der Generationen lassen sich mit `BUZZ_LOG_ROTATE_MAX_BYTES`
+  und `BUZZ_LOG_ROTATE_KEEP` unter `EnvironmentVariables` im plist ändern;
+  abschalten mit
+  `launchctl bootout gui/$(id -u)/com.buzz.relay-logrotate`.
+
+Standardkanal (seit 11.11.2026, claude): #general
+(`81e436aa-9e83-593a-af1e-7d934540f48c`) hat `auto_join=true`, gesetzt mit
+der menschlichen Pilot-Identität, die der Relay-Owner ist:
+`buzz channels update --channel <id> --auto-join true` (kind:9002). Owner oder
+Admin des Relays dürfen das, nur für offene, nicht archivierte Stream-Kanäle.
+Weil das Relay mit `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` läuft, treten nur neu
+aufgenommene Mitglieder bei (Einladung einlösen oder kind:9030); bestehende
+Mitglieder bleiben unberührt, `buzz-admin add-member` löst keinen Beitritt
+aus. Der Owner (`2e392aee`) und `fab8af02` waren nie in #general und wurden
+am 11.11. auf Christians Wunsch von Hand aufgenommen (kind:9021 und
+kind:9000 durch den Owner); seitdem sind alle Relay-Mitglieder drin.
+Zurück mit `--auto-join false`.
+
+Media-Prüfung im Schattenmodus (seit 11.11.2026 19:22 Uhr, claude):
+`BUZZ_MEDIA_READ_MODE=shadow` in
+`~/Library/Application Support/Buzz Pilot/relay.env` auf Studio 2. Das Relay
+prüft jeden Medienabruf und jede Veröffentlichung mit Anhängen gegen die
+Kanalmitgliedschaft, sperrt aber nichts (im Code jeder Fehlerpfad `Ok`,
+`crates/buzz-relay/src/api/media_access.rs`). Ab jetzt zeichnet es
+Upload-Nachweise in `media_uploaders` auf, die `enforce` braucht.
+
+- Beobachten:
+  - `buzz_media_read_access_total{mode="shadow",reason=...}` mit `allow`,
+    `no_ref`, `not_member`, `lookup_error` und `capacity`;
+  - dazu `buzz_media_publication_access_total` auf `127.0.0.1:9202/metrics`.
+- Erster Stand nach dem Start: Ein vor dem Umschalten hochgeladenes, nie
+  verwendetes Bild zählt als `no_ref`, ein neu hochgeladenes als `allow`;
+  beide wurden ausgeliefert.
+- Antwortzeit der Abrufe (`time_to_response_ms` im Zugriffslog), vorher im
+  Median 18 ms:
+  - Anhänge aus Nachrichten: 45 bis 55 ms.
+  - Avatare: rund 85 ms.
+  - Bilder ohne Referenz: rund 120 ms.
+  Alle Abrufe ohne Fehler. Die Prüfung hat 8 Plätze (ein Viertel des
+  Schreib-Pools von 50, höchstens 8), das reicht für etwa 90 Avatar-Prüfungen
+  pro Sekunde.
+- Voraussetzung war der gültige Index `idx_events_media_edit_target` aus
+  Migration 0086, an allen 8 Event-Partitionen angehängt.
+- Dump vor dem Neustart und die vorherige `relay.env` liegen in
+  `backups/media-shadow-20261111` (Dump SHA-256 `9ec0f075aead…`, 805 Zeilen).
+- Zurück: die Zeile aus `relay.env` entfernen und `com.buzz.relay` neu
+  starten.
+- Vor `enforce` laut `docs/operator-private-media.md`:
+  - Alle Bearbeitungswerkzeuge müssen die Anhänge erhalten. Der Mobile-Editor,
+    der Editor der App-Oberfläche und der MCP von `block/buzz-app` tun es noch
+    nicht.
+  - Medien, die vor `shadow` hochgeladen und nie veröffentlicht wurden,
+    brauchen einen neuen Upload.
+  - Jeder Agent braucht eigene Upload-Nachweise für seine Avatare.
+  - `no_ref`, `not_member` und `lookup_error` vorher über einige Tage
+    auswerten.
+
+## Historischer Stand vom 01.11.2026
 
 Deployment vom 01.11.2026 (claude, Freigabe durch Christian am selben Tag):
 
