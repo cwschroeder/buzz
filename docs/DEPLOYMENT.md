@@ -62,7 +62,8 @@ Operator-Schritt mit Backup.
 
 ## Aktiver Stand
 
-Zwei Deployments am 11.11.2026 (claude, Freigabe durch Christian am 10.11.
+Zwei Deployments am 11.11.2026, dazu ein dritter Neustart nur für die
+Media-Einstellung um 19:22 Uhr (claude, Freigabe durch Christian am 10.11.
 „Nach Merge deployen“ und am 11.11. „dann updaten“). Den Merge macht der
 Repo-Agent der Fabrik, ausrollen darf er nicht; das übernimmt die interaktive
 Session.
@@ -73,7 +74,8 @@ Session.
 - Relay SHA-256: `05f8a05523af8e980e2cc2870a732df04285593abfffb6680c1f0570fc95aa2c`.
 - Pair-Relay SHA-256: `9dc1b281271f8690d14056081a9a421f74bece377cc031f42342fda25b7d9b1e`
   (seit dem ersten Deployment unverändert).
-- PIDs bei Abschluss: Relay `41590`, Pair-Relay `88961`.
+- PIDs: Relay `57311` seit dem Neustart um 19:22 Uhr (davor `41590`),
+  Pair-Relay `88961`.
 - Datenstand: 43.778 Events, 137 Kanäle, 16 Mitglieder, vor und nach dem
   Neustart gleich.
 - Einzelheiten, Tests und neue Funktionen:
@@ -147,7 +149,9 @@ Admin des Relays dürfen das, nur für offene, nicht archivierte Stream-Kanäle.
 Weil das Relay mit `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` läuft, treten nur neu
 aufgenommene Mitglieder bei (Einladung einlösen oder kind:9030); bestehende
 Mitglieder bleiben unberührt, `buzz-admin add-member` löst keinen Beitritt
-aus. Zurück mit `--auto-join false`.
+aus. Von den 16 Relay-Mitgliedern sind 14 in #general; der Owner
+(`2e392aee`) und `fab8af02` waren nie drin und werden auch nicht nachgeholt.
+Zurück mit `--auto-join false`.
 
 Media-Prüfung im Schattenmodus (seit 11.11.2026 19:22 Uhr, claude):
 `BUZZ_MEDIA_READ_MODE=shadow` in
@@ -164,6 +168,14 @@ Upload-Nachweise in `media_uploaders` auf, die `enforce` braucht.
 - Erster Stand nach dem Start: Ein vor dem Umschalten hochgeladenes, nie
   verwendetes Bild zählt als `no_ref`, ein neu hochgeladenes als `allow`;
   beide wurden ausgeliefert.
+- Antwortzeit der Abrufe (`time_to_response_ms` im Zugriffslog), vorher im
+  Median 18 ms:
+  - Anhänge aus Nachrichten: 45 bis 55 ms.
+  - Avatare: rund 85 ms.
+  - Bilder ohne Referenz: rund 120 ms.
+  Alle Abrufe ohne Fehler. Die Prüfung hat 8 Plätze (ein Viertel des
+  Schreib-Pools von 50, höchstens 8), das reicht für etwa 90 Avatar-Prüfungen
+  pro Sekunde.
 - Voraussetzung war der gültige Index `idx_events_media_edit_target` aus
   Migration 0086, an allen 8 Event-Partitionen angehängt.
 - Dump vor dem Neustart und die vorherige `relay.env` liegen in

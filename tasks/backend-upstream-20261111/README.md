@@ -163,7 +163,9 @@ Christian: „mach auch 4 und 5“. Einzelheiten und Rückweg in
   die Kanal-Metadaten (kind:39000) mit dem Tag `auto_join` neu veröffentlicht
   und in #general die Systemmeldung `auto_join_changed` gepostet.
 - Mit Mitgliederliste (`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) gilt das nur für
-  künftige Aufnahmen; alle 16 Mitglieder sind ohnehin in #general. Ein echter
+  künftige Aufnahmen. 14 der 16 Relay-Mitglieder sind in #general; der Owner
+  (`2e392aee`) und `fab8af02` waren nie drin und werden nicht nachgeholt
+  (zuerst falsch als „alle 16“ gemeldet, in Buzz korrigiert). Ein echter
   Neueintritt ist nicht erprobt, um im Produktivkanal kein Testmitglied
   anzulegen. Upstream testet den Pfad mit Postgres-Tests im Relay
   (`group_state_postgres_tests`, `invites/postgres_tests/recovery_postgres_tests`).
