@@ -159,3 +159,25 @@ ergänzt.
   Operator-Listener, Workflows und Push-Leases in der Kopie.
 - Ab Migration 0058 gibt es keinen Rückweg per Binärtausch mehr, nur über den
   Dump. Den Dump deshalb als letzten Schritt direkt vor dem Neustart ziehen.
+
+## 2026-11-11: Relay-Update auf Upstream vom 11.11. (claude)
+
+- Der Repo-Agent der Fabrik prüft und merged Fork-PRs, darf aber nicht
+  deployen. Sein Ergebnis lautet dann „Nicht live“; den Rollout macht die
+  interaktive Session mit Christians Freigabe.
+- Ein anonymer Media-GET auf `/media/<sha256>` gibt 401, weil Blossom eine
+  Anmeldung verlangt. Prüfen mit `buzz media get` und der Repo-Identität,
+  dann den Hash vergleichen.
+- Studio 2 hat Homebrew-Rust 1.99.1 vorn im `PATH`. Ohne
+  `. ./bin/activate-hermit` baut und testet der falsche Compiler; Skripte
+  prüfen deshalb `cargo --version` auf 1.98.1.
+- Das Zugriffslog `buzz_relay::access` (neu mit PR #8)
+  verdoppelt das Logvolumen. `/private/tmp/buzz-relay.log` wird nicht rotiert.
+- Ein PR ohne Änderungen am Pair-Relay ergibt ein byte-gleiches
+  `buzz-pair-relay`. Mit `cmp` gegen das laufende Binary prüfen und den
+  Neustart dann auslassen.
+- Wird ein `cargo build` per `pkill` abgebrochen, laufen seine `rustc`-Kinder
+  weiter und schreiben ins gleiche `target/`. Vor dem nächsten Build
+  `pgrep rustc` prüfen.
+- ms2 holt den Fork nur über das Remote `origin` (HTTPS); ein Remote `fork`
+  gibt es dort nicht.

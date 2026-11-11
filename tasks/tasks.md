@@ -57,3 +57,12 @@ fiel auf 404. Wiederherstellung aus dem 16:56-Dump, Verlustfenster ~16:56 bis
 | erledigt | `f2f76c4fa` (Upstream `9e8c9fc04` plus Sicherheitsupdates aus PR #2) als Relay und Pair-Relay auf Mac Studio 2 ausgerollt | [Prüfung und Nachweise](backend-upstream-20261101/README.md) |
 | offen | Events aus der Auffang-Partition `events_p_future` in Monatspartitionen umverteilen (Operator-Schritt mit Backup) | `docs/DEPLOYMENT.md`, offener Betriebspunkt |
 | offen | Upstream ab `a56966b77` (#8522, Live-Sync für Artefakte) und die korrigierte Testvorbereitung `d6196a16c` übernehmen | `backend-upstream-20261101/README.md` |
+
+## 2026-11-11 - Relay-Update auf Upstream vom 11.11. (claude)
+
+| Status | Aufgabe | Details |
+|---|---|---|
+| erledigt | PR #8 (`04498c170`, Upstream `44b3c4823`, Schema 68 auf 86) und PR #9 (`ae7f9c0a2`, Upstream `95dd9d67d`) als Relay auf Mac Studio 2 ausgerollt | [Prüfung und Nachweise](backend-upstream-20261111/README.md) |
+| erledigt | Upstream ab `a56966b77` (#8522, Live-Sync für Artefakte) und `d6196a16c` übernehmen (offen seit 01.11.) | in PR #8 enthalten |
+| offen | Neue CLI an die Agenten verteilen (Stand dort `677a282a4`) | `backend-upstream-20261111/README.md` |
+| offen | Logvolumen des Zugriffslogs `buzz_relay::access` begrenzen | `docs/DEPLOYMENT.md`, offener Betriebspunkt |
