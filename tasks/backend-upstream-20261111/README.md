@@ -68,7 +68,7 @@ Ohne Zutun aktiv:
   Fork-Schutz bleibt nötig, weil Upstream außerhalb von NIP-FI weiter
   `OK false` schickt (`handlers/auth.rs`).
 - Zugriffslog `buzz_relay::access` mit `close_reason` je Verbindung (siehe
-  offener Betriebspunkt zum Logvolumen in `docs/DEPLOYMENT.md`).
+  Abschnitt Logrotation in `docs/DEPLOYMENT.md`).
 - Media mit `Cache-Control: private, no-store`; WebP-Vorschaubilder, die bei
   Bedarf neu erzeugt werden (Commit-Text).
 - Einladungen gesperrter Aussteller werden beim Einlösen widerrufen.
