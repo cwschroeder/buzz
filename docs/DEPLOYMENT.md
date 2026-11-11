@@ -149,8 +149,9 @@ Admin des Relays dürfen das, nur für offene, nicht archivierte Stream-Kanäle.
 Weil das Relay mit `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` läuft, treten nur neu
 aufgenommene Mitglieder bei (Einladung einlösen oder kind:9030); bestehende
 Mitglieder bleiben unberührt, `buzz-admin add-member` löst keinen Beitritt
-aus. Von den 16 Relay-Mitgliedern sind 14 in #general; der Owner
-(`2e392aee`) und `fab8af02` waren nie drin und werden auch nicht nachgeholt.
+aus. Der Owner (`2e392aee`) und `fab8af02` waren nie in #general und wurden
+am 11.11. auf Christians Wunsch von Hand aufgenommen (kind:9021 und
+kind:9000 durch den Owner); seitdem sind alle Relay-Mitglieder drin.
 Zurück mit `--auto-join false`.
 
 Media-Prüfung im Schattenmodus (seit 11.11.2026 19:22 Uhr, claude):
