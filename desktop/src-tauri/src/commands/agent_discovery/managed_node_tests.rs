@@ -72,6 +72,32 @@ fn make_zip_with_entries(entry_names: &[&str]) -> tempfile::NamedTempFile {
 }
 
 #[test]
+fn test_extract_zip_deflated_file() {
+    // Exercise the production extraction path, not only name validation: the
+    // zip 9 bump reduced features to deflate/stored, so decompression must
+    // still produce the expected bytes.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file("node-v24.18.0-win-x64/node.exe", opts)
+            .unwrap();
+        std::io::Write::write_all(&mut writer, b"node-binary").unwrap();
+        writer.finish().unwrap();
+    }
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut tmp, &buf).unwrap();
+    let file = std::fs::File::open(tmp.path()).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let dest = tempfile::TempDir::new().unwrap();
+    extract_managed_node_zip(&mut archive, dest.path()).unwrap();
+    let extracted = std::fs::read(dest.path().join("node-v24.18.0-win-x64/node.exe")).unwrap();
+    assert_eq!(extracted, b"node-binary");
+}
+
+#[test]
 fn test_validate_zip_accepts_normal_entries() {
     let tmp = make_zip_with_entries(&[
         "node-v24.18.0-win-x64/node.exe",

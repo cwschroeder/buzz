@@ -134,7 +134,10 @@ png = "0.18"
 # target-gated inside arboard; at runtime X11 sessions still fall back to X11.
 arboard = { version = "3", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
-zip = "8"
+# Node.js Windows archives use deflate/stored only. deflate-flate2 relies on
+# the direct flate2 dependency below for its miniz_oxide backend; keep the zip
+# dependency surface minimal while staying on the patched 9.x line.
+zip = { version = "9.1.0", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"
 sherpa-onnx = "1.12"
 regex = "1"
