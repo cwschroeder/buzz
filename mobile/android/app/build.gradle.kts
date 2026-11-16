@@ -197,6 +197,10 @@ android {
 }
 
 dependencies {
+    constraints {
+        // GHSA-xxph-c9ww-hj94: fix is 33.7.2; published 2026-09-29, older than 48h.
+        implementation("com.google.guava:guava:33.7.2-android")
+    }
     implementation("com.google.android.play:age-signals:0.0.4")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.browser:browser:1.9.0")
