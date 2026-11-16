@@ -16,12 +16,11 @@ ignore = [
     { id = "RUSTSEC-2026-0194", reason = "transitive via rust-s3 and mesh-llm→plist; trusted-input XML only; no upstream fix available yet" },
     { id = "RUSTSEC-2026-0195", reason = "transitive via rust-s3 and mesh-llm→plist; trusted-input XML only; no upstream fix available yet" },
     # zip advisories RUSTSEC-2026-0367/-0368/-0369/-0429 are patched only in
-    # zip >= 9.0.0. zip 2.4.2 (mesh-llm v0.75.1) and zip 4.6.1
-    # (tauri-plugin-updater 2.10.1) remain upstream-pinned. buzz-desktop uses
-    # only by_index/enclosed_name, not ZipArchive::extract(); removing the
-    # remaining versions needs the mesh-llm v0.79 migration or an updater
-    # release on zip 9. No ignore is added here: that needs an explicit
-    # security-policy decision.
+    # zip >= 9.0.0. zip 2.4.2 (mesh-llm v0.75.1) remains upstream-pinned;
+    # tauri-plugin-updater 2.14.1 now uses zip 9. buzz-desktop uses only
+    # by_index/enclosed_name, not ZipArchive::extract(); removing the
+    # remaining version needs the mesh-llm v0.79 migration. No ignore is added
+    # here: that needs an explicit security-policy decision.
 ]
 
 [licenses]
